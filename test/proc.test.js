@@ -87,3 +87,27 @@ test("the windows kill still fires while the child is alive", win32Only, async (
     try { victim.kill(); } catch {}
   }
 });
+
+// agy runs each shell command in its own session (setsid): on Linux `sleep 131` had its own pgid
+// and sid, apart from agy's group. The group kill missed it, and a hard-cap teardown left the
+// command running (measured in WSL, agy 1.5.14). Real processes: a fake agent leads its group and
+// starts a grandchild in a new session, as agy does.
+test("treeKill reaches a descendant the agent started in its own session", posixOnly, async () => {
+  const agentSrc = [
+    "const { spawn } = require('node:child_process');",
+    "const g = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' });",
+    "console.log(g.pid);",
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
+  const agent = spawn(process.execPath, ["-e", agentSrc], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+  const grandchild = Number(await new Promise((resolve) => agent.stdout.once("data", (d) => resolve(String(d).trim()))));
+  assert.ok(alive(grandchild), "the grandchild must be running before the kill");
+  try {
+    await treeKill(agent.pid, { childAlive: true });
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(alive(grandchild), false, "the grandchild in its own session survived the kill");
+  } finally {
+    try { process.kill(grandchild, "SIGKILL"); } catch {}
+    try { process.kill(-agent.pid, "SIGKILL"); } catch {}
+  }
+});
