@@ -1,6 +1,6 @@
 {
   "name": "agy-delegate-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "mcpName": "io.github.andreilungeanu/agy-delegate-mcp",
   "type": "module",
   "description": "Delegate multi-file coding work from Claude Code, Codex, Copilot, or any MCP client to Google's Antigravity CLI (agy) — structured results, plan mode, and changed files.",
@@ -43,7 +43,8 @@
     "PRIVACY.md",
     "SECURITY.md",
     "TERMS.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node scripts/run-tests.mjs",
