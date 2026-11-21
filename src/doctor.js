@@ -85,8 +85,8 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
 }
 
 async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs }) {
-  const client = clientFactory({ spawnSpec });
   const workspaceDir = workspace || process.cwd();
+  const client = clientFactory({ spawnSpec, cwd: workspaceDir });
   let timer;
   try {
     const details = {};

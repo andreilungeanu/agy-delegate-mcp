@@ -5,7 +5,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, writeFileSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient } from "../src/acp-client.js";
@@ -1449,7 +1449,8 @@ test("a diff on a completed tool_call frame is reported", async () => {
   assert.deepEqual(out.filesReportedByEditTools, ["a.txt"]);
 });
 
-// agy 1.5.14 moves a shell command that runs past about 12 s to the background and ends the turn:
+// agy 1.5.14 moves a shell command to the background once it outlasts the call's WaitMsBeforeAsync
+// (a wait agy picks per command; about 12 s for this ping) and ends the turn:
 // the execute tool_call never reaches a terminal status, and agy's only message arrives while it
 // counts as running. Measured live (docs/captures/scenarios.jsonl, backgrounded-command): the
 // bridge returned result "" with a warning that agy sent no message at all.
@@ -1496,4 +1497,14 @@ test("a question agy leaves open through ask_question comes back as the result",
   assert.equal(out.result, question);
   assert.equal(out.resultSource, "unfinished-tool");
   assert.ok(out.protocolWarnings.some((w) => /still running \(Run ask_question\)/.test(w) && /a resume answers/.test(w)));
+});
+
+test("runDelegate starts the agent in the workspace, not the server's directory", async () => {
+  const seen = [];
+  const workspace = mkdtempSync(path.join(tmpdir(), "delegate-cwd-"));
+  await runDelegate({
+    spec: "do the thing", mode: "agent", workspace,
+    clientFactory: (opts) => { seen.push(opts); return replayFactory([msgChunk("ok")])(); },
+  });
+  assert.equal(seen[0]?.cwd, workspace);
 });

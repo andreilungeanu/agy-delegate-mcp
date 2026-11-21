@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -352,4 +352,19 @@ test("the exit error carries the whole of stderr, not a tail of it", async () =>
   assert.equal(err?.reason, "agent-exit");
   assert.ok(err.message.includes(marker), "the front of stderr must survive into the exit error");
   assert.ok(err.message.length > 2000, `the whole of stderr must be carried, got ${err.message.length} chars`);
+});
+
+// agy reads its process directory as workspace too: started from the MCP server's directory it
+// listed it and ran git status/diff there. The agent process has to start in the workspace.
+test("start() runs the agent in the cwd it was given", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "acp-cwd-"));
+  const client = new AcpClient({
+    cwd: dir,
+    spawnSpec: { command: process.execPath, args: ["-e", "process.stderr.write(process.cwd())"], options: { shell: false } },
+  });
+  const exited = new Promise((resolve) => client.once("exit", resolve));
+  await client.start();
+  await exited;
+  assert.equal(realpathSync(client.stderrBuffer), realpathSync(dir));
+  await client.stop();
 });

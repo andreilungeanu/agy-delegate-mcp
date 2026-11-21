@@ -19,9 +19,14 @@ export class AcpClient extends EventEmitter {
    *   spawnSpec?: { command: string, args: string[], options?: object },
    * }} [opts]
    */
-  constructor({ spawnSpec } = {}) {
+  /** @param {{ spawnSpec?: any, cwd?: string }} [opts] */
+  constructor({ spawnSpec, cwd } = {}) {
     super();
     this.spawnSpec = spawnSpec || resolveAcpSpawn();
+    // agy treats its process directory as part of the workspace, not only the session's cwd:
+    // started from the MCP server's directory it listed that directory and ran git status and
+    // git diff there (measured, agy 1.5.14). Started in the workspace, there is nothing else to see.
+    this.cwd = cwd;
     this._stderrChunks = [];
     this._stderrLength = 0;
     /** @type {Promise<boolean> | null} */
@@ -48,7 +53,7 @@ export class AcpClient extends EventEmitter {
     this._stderrLength = 0;
     const stderrDecoder = new StringDecoder("utf8");
     this._exitEmitted = false;
-    this.child = spawn(command, args, { ...options, detached: DETACHED, stdio: ["pipe", "pipe", "pipe"] });
+    this.child = spawn(command, args, { ...options, ...(this.cwd ? { cwd: this.cwd } : {}), detached: DETACHED, stdio: ["pipe", "pipe", "pipe"] });
     this.child.stderr.on("data", (chunk) => {
       const text = stderrDecoder.write(chunk);
       if (text) {

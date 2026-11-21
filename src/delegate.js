@@ -271,7 +271,7 @@ export async function runDelegate({
   const state = makeTurnState({ onProgress, progressThrottleMs });
 
   const make = clientFactory || ((opts) => new AcpClient(opts));
-  const client = make({});
+  const client = make({ cwd: workspace });
   // Handed over before the spawn, because from client.start() there is an agent process and the
   // caller needs something that can stop it.
   onClientReady?.(client);
@@ -424,13 +424,14 @@ export async function runDelegate({
     const protocolWarnings = [];
     if (!finalMessageAvailable && state.activeToolCalls.size > 0) {
       // agy ends a turn with a call unfinished in two measured cases (agy 1.5.14): it moves a
-      // shell command that runs past about 12 s to the background, or it waits on ask_question.
+      // shell command to the background once it outlasts the call's WaitMsBeforeAsync, a wait agy
+      // picks per command, or it waits on ask_question.
       // The bridge stops agy when the delegation returns, so a backgrounded command stops with it.
       result = state.unfinishedToolText;
       resultSource = result ? "unfinished-tool" : "none";
       protocolWarnings.push(
         `the turn ended with a tool call still running (${state.lastToolLabel ?? "unnamed tool"}).`
-        + " agy does this when it moves a shell command that runs past about 12 s to the background —"
+        + " agy does this when it moves a shell command to the background after the wait it set for it (WaitMsBeforeAsync) —"
         + " the command stops when the bridge stops agy — and when it asks a question (ask_question),"
         + " which a resume answers."
         + (result ? " result is agy's message from while it ran." : " agy sent no message while it ran.")
