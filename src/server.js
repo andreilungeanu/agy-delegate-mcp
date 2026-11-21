@@ -10,6 +10,13 @@ import { runDoctor as runDoctorDefault } from "./doctor.js";
 import { VERSION, readPackageVersion } from "./version.js";
 import { DETACHED } from "./proc.js";
 
+const ICON_BASE = `https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v${VERSION}/assets`;
+/** @type {Array<{ src: string, mimeType: string, sizes: string[], theme: "light" | "dark" }>} */
+const SERVER_ICONS = [
+  { src: `${ICON_BASE}/logo-light.png`, mimeType: "image/png", sizes: ["1024x1024"], theme: "light" },
+  { src: `${ICON_BASE}/logo-dark.png`, mimeType: "image/png", sizes: ["1024x1024"], theme: "dark" },
+];
+
 const nodeMajor = Number(process.versions.node.split(".")[0]);
 if (nodeMajor < 20) {
   console.error(`agy-delegate-mcp requires Node 20+ (found ${process.versions.node})`);
@@ -241,7 +248,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
   const runDelegate = runDelegateInjected || runDelegateDefault;
   const runDoctor = runDoctorInjected || runDoctorDefault;
   const server = new McpServer(
-    { name: "agy-delegate-mcp", version: VERSION },
+    { name: "agy-delegate-mcp", version: VERSION, icons: SERVER_ICONS },
     { instructions: SERVER_INSTRUCTIONS }
   );
 

@@ -3,6 +3,24 @@
   "name": "io.github.andreilungeanu/agy-delegate-mcp",
   "title": "Antigravity Delegate",
   "description": "Bridge AI coding hosts to Google Antigravity's agy over the Agent Client Protocol.",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v0.1.0/assets/logo-light.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "1024x1024"
+      ],
+      "theme": "light"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v0.1.0/assets/logo-dark.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "1024x1024"
+      ],
+      "theme": "dark"
+    }
+  ],
   "version": "0.1.0",
   "websiteUrl": "https://github.com/andreilungeanu/agy-delegate-mcp",
   "repository": {

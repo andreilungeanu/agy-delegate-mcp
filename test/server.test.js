@@ -149,10 +149,20 @@ test("server advertises instructions, output schemas, and conservative tool anno
 
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
-    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    // SEP-973 icons on initialize must match the registry listing — HTTPS URLs, not file://.
+    // SDK 1.23.0 (the declared minimum) strips `theme` when parsing initialize; newer SDKs keep it.
+    const registry = JSON.parse(readFileSync(new URL("../server.json", import.meta.url), "utf8"));
     const advertised = client.getServerVersion();
     assert.equal(advertised.name, "agy-delegate-mcp");
-    assert.equal(advertised.version, pkg.version);
+    assert.equal(advertised.version, registry.version);
+    assert.equal(advertised.icons?.length, registry.icons?.length);
+    for (const [i, icon] of advertised.icons.entries()) {
+      const listed = registry.icons[i];
+      assert.equal(icon.src, listed.src);
+      assert.equal(icon.mimeType, listed.mimeType);
+      assert.deepEqual(icon.sizes, listed.sizes);
+      if (icon.theme !== undefined) assert.equal(icon.theme, listed.theme);
+    }
     // Assert the invariants a host cannot infer, not the prose carrying them: hosts that
     // never load the skill see only this string.
     const instructions = client.getInstructions();
