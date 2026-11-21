@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-22
+
+### Added
+
+- A command agy moves to the background is waited for. agy ends the turn when a shell command
+  outlasts the wait it set for it (`WaitMsBeforeAsync`); kept running, it finishes the command and
+  reports on it, and that report is the result. Stopping agy at the end of the turn stopped the
+  command: a 25 s `npm test` came back unfinished. `AGY_DELEGATE_BACKGROUND_WAIT_MS` bounds the wait
+  (default 10 min); a command still running then comes back as `unfinished-tool`. A cancel ends the
+  wait at once with `stopReason: "cancelled"`.
+- `not-signed-in` failure reason: a signed-out agy is reported with the step to sign in. It read as
+  `agent-error: Authentication required`.
+
+### Fixed
+
+- On Linux, stopping agy also stops the commands it runs in their own session. A command outlived a
+  hard-cap teardown.
+
 ## [1.2.0] - 2026-11-22
 
 ### Added
