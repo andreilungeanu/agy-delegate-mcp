@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Antigravity Delegate: plan, delegate, implement, review</title>
+  <desc id="desc">You and Claude Code, Codex, or Copilot plan and review. The MCP delegate tool sends the brief to agy-delegate-mcp, which talks to agy acp over the Agent Client Protocol. Gemini or another model implements and edits the workspace. The bridge returns a structured result with result, filesReportedByEditTools, plan, sessionId, and effectiveModel for review. Some fields are conditional. Review the git diff and resume with sessionId to continue.</desc>
+  <defs>
+    <marker id="forward" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L10 6L1 11Z" fill="#697180"/>
+    </marker>
+    <marker id="return" markerWidth="18" markerHeight="18" refX="14" refY="9" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M2 2L15 9L2 16Z" fill="#387153"/>
+    </marker>
+    <style>
+      text { font-family: 'Segoe UI', Arial, sans-serif; fill: #30343E; }
+      .code { font-family: Consolas, 'DejaVu Sans Mono', monospace; }
+      .muted { fill: #646B77; }
+      .label { font-size: 24px; }
+      .body { font-size: 28px; }
+      .node-title { font-size: 34px; font-weight: 600; }
+      .field { font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 25px; fill: #2D6349; }
+    </style>
+  </defs>
+
+  <!-- Opaque cream canvas stays readable in either GitHub theme. All symbols are original. -->
+  <rect width="1600" height="900" fill="#F4EFE4"/>
+
+  <!-- Compact version of the rising-task / orbital hand-off mark. -->
+  <g transform="translate(64 48) scale(.095)">
+    <path d="M360 502C247 522 184 581 190 648C200 752 392 804 574 758C736 717 841 615 810 486M728 544L810 470L852 574" fill="none" stroke="#41434C" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M478 538V606M546 520V568" fill="none" stroke="#FF6B6B" stroke-width="30" stroke-linecap="round"/>
+    <rect x="384" y="172" width="256" height="256" rx="42" transform="rotate(45 512 300)" fill="#FF6B6B"/>
+  </g>
+  <text x="184" y="101" font-size="48" font-weight="600">Antigravity Delegate</text>
+  <text x="184" y="146" font-size="27" class="muted">Plan together. Delegate implementation. Review the diff.</text>
+  <path d="M64 184H1536" stroke="#DCD7CC" stroke-width="2"/>
+
+  <text x="64" y="235" class="label muted" letter-spacing="2">THE DELEGATION LOOP</text>
+
+  <!-- Host: owns the brief and reviews actual changes. -->
+  <rect x="64" y="274" width="420" height="272" rx="24" fill="#FFFDFA" stroke="#D96960" stroke-width="3"/>
+  <text x="96" y="328" class="node-title">You + your agent</text>
+  <text x="96" y="372" font-size="25" class="muted">Claude Code / Codex / Copilot</text>
+  <path d="M96 398H452" stroke="#E9E3D9" stroke-width="2"/>
+  <text x="96" y="448" class="body">Plan the work</text>
+  <text x="96" y="493" class="body">Review the git diff</text>
+
+  <!-- The MCP tool is the entry point; the bridge and CLI are distinct. -->
+  <text x="555" y="348" text-anchor="middle" class="label muted">MCP</text>
+  <text x="555" y="382" text-anchor="middle" class="code" font-size="25">delegate</text>
+  <text x="555" y="412" text-anchor="middle" font-size="23" class="muted">tool</text>
+  <path d="M496 440H613" stroke="#697180" stroke-width="3" fill="none" marker-end="url(#forward)"/>
+
+  <rect x="626" y="274" width="340" height="272" rx="24" fill="#FFFDFA" stroke="#5C86A5" stroke-width="3"/>
+  <text x="658" y="328" class="code" font-size="29" font-weight="700">agy-delegate-mcp</text>
+  <text x="658" y="372" font-size="25" class="muted">MCP server</text>
+  <path d="M658 398H934" stroke="#E9E3D9" stroke-width="2"/>
+  <text x="658" y="448" class="body">Routes the brief</text>
+  <text x="658" y="493" class="body">Collects the result</text>
+
+  <text x="1037" y="365" text-anchor="middle" class="code" font-size="25">ACP</text>
+  <text x="1037" y="402" text-anchor="middle" font-size="23" class="muted">stdio</text>
+  <path d="M978 440H1095" stroke="#697180" stroke-width="3" fill="none" marker-end="url(#forward)"/>
+
+  <rect x="1108" y="274" width="428" height="272" rx="24" fill="#FFFDFA" stroke="#5C86A5" stroke-width="3"/>
+  <text x="1140" y="328" class="node-title code">agy acp</text>
+  <text x="1140" y="372" font-size="27" class="muted">Gemini / other models</text>
+  <path d="M1140 398H1504" stroke="#E9E3D9" stroke-width="2"/>
+  <text x="1140" y="448" class="body">Implements + edits</text>
+  <text x="1140" y="493" class="body">the workspace</text>
+
+  <!-- Results are collected by the bridge before returning through MCP. -->
+  <path d="M1322 559V579Q1322 592 1309 592H809Q796 592 796 605V617" fill="none" stroke="#387153" stroke-width="3" marker-end="url(#return)"/>
+
+  <rect x="626" y="630" width="910" height="214" rx="24" fill="#FBFDF8" stroke="#5C8967" stroke-width="3"/>
+  <text x="658" y="677" font-size="32" font-weight="600" fill="#2D6349">Structured result</text>
+  <text x="1504" y="677" text-anchor="end" font-size="22" class="muted">Selected fields · some conditional</text>
+  <path d="M658 698H1504" stroke="#DFE7DA" stroke-width="2"/>
+  <text x="658" y="737" class="field">result</text>
+  <text x="1152" y="737" class="field">sessionId</text>
+  <text x="658" y="779" class="field">filesReportedByEditTools</text>
+  <text x="1152" y="779" class="field">effectiveModel</text>
+  <text x="658" y="821" class="field">plan</text>
+
+  <path d="M612 737H294Q274 737 274 717V559" fill="none" stroke="#387153" stroke-width="3" stroke-dasharray="10 9" marker-end="url(#return)"/>
+  <text x="430" y="682" text-anchor="middle" font-size="29" fill="#2D6349">Back for review</text>
+  <text x="274" y="796" text-anchor="middle" font-size="25" class="muted">Continue via <tspan class="code">sessionId</tspan></text>
+</svg>
