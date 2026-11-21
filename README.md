@@ -5,6 +5,7 @@ Delegate edits to Google Antigravity's CLI agent (`agy`) — your agent writes t
 [![npm version](https://img.shields.io/npm/v/agy-delegate-mcp)](https://www.npmjs.com/package/agy-delegate-mcp)
 [![npm downloads](https://img.shields.io/npm/dt/agy-delegate-mcp)](https://www.npmjs.com/package/agy-delegate-mcp)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=agy-delegate&version=latest)
+[![agy-delegate-mcp MCP server](https://glama.ai/mcp/servers/andreilungeanu/agy-delegate-mcp/badges/score.svg)](https://glama.ai/mcp/servers/andreilungeanu/agy-delegate-mcp)
 [![node](https://img.shields.io/node/v/agy-delegate-mcp)](https://nodejs.org)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![tests](https://github.com/andreilungeanu/agy-delegate-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/andreilungeanu/agy-delegate-mcp/actions/workflows/test.yml)
