@@ -384,6 +384,16 @@ test("runDelegate includes the tool location in running: progress when present",
   assert.ok(progress.includes("running: grep"), "bare label when the agent sends no location");
 });
 
+// agy 1.5.14's edit_file tool_call, as a live stdio run reported it: the title names the file with
+// forward slashes, the location with backslashes. The path is shown once.
+test("a title that already names the location is not followed by it again", async () => {
+  const progress = await collectProgress([
+    { sessionUpdate: "tool_call", toolCallId: "t1", name: "edit_file", title: "File C:/ws/notes.txt", kind: "edit", status: "in_progress",
+      locations: [{ path: "C:\\ws\\notes.txt" }] },
+  ]);
+  assert.ok(progress.includes("running: File C:/ws/notes.txt"), JSON.stringify(progress));
+});
+
 test("a multi-line tool title is reported as one line", async () => {
   // A terminal tool's title is the command the agent sent, and it sends a multi-line script
   // verbatim. Both readers of this take one line: the progress notification, and the "last tool

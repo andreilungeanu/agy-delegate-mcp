@@ -348,7 +348,11 @@ export async function runDelegate({
         // Collapsed onto one line the way both readers of this take it: a progress notification
         // and the "last tool call" line in a stall error. A command title arrives verbatim, so a
         // multi-line script arrives with its newlines.
-        state.lastToolLabel = (label + (path && !label.includes(path) ? " — " + path : "")).replace(/\s+/g, " ").trim();
+        // agy's titles already name the file, with forward slashes where the location has
+        // backslashes, so the path is appended only when the title does not carry it.
+        const slashed = (s) => String(s).replace(/\\/g, "/");
+        const named = path && slashed(label).includes(slashed(path));
+        state.lastToolLabel = (label + (path && !named ? " — " + path : "")).replace(/\s+/g, " ").trim();
         try { onProgress?.(("running: " + state.lastToolLabel).slice(0, 200)); } catch {}
       } else {
         state.updateToolStatus(up.toolCallId, up.status);
