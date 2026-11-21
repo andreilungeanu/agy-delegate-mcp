@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-22
+
+### Added
+
+- `resultSource: "unfinished-tool"`: a turn that ends with a tool call still running returns agy's
+  message from while it ran, and `protocolWarnings` names the tool. agy ends a turn this way when
+  it moves a shell command to the background after the wait it set for it (`WaitMsBeforeAsync`),
+  which stops with agy when the delegation returns, and when it asks a question through
+  `ask_question`, which a resume answers. The result was empty, with a warning that agy sent no
+  message.
+
+### Fixed
+
+- agy starts in the workspace. Started in the MCP server's directory, it listed that directory and
+  ran `git status` and `git diff` there during a delegation to another workspace.
+- A missing agy on Windows is reported as `spawn-failed` with the install hint, and `doctor`
+  reports `found: false`. Launched through cmd.exe it read as `agent-exit` quoting cmd's
+  "is not recognized" line, and `doctor` reported `found: true`.
+- `cancel` with `force` returns as soon as the turn settles, in about 60 ms, instead of waiting out
+  its 5 s grace.
+
 ## [1.1.0] - 2026-11-22
 
 ### Changed
