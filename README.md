@@ -10,7 +10,9 @@ Antigravity Delegate is the MCP bridge that lets Claude Code, ChatGPT/Codex, Cop
 
 <br clear="left">
 
-![You and your agent plan and review; the MCP delegate tool hands the brief to agy-delegate-mcp, which runs agy acp to implement and edit the workspace; a structured result comes back with the answer, edited files, plan, session id and model, for your agent to review](assets/flow.png)
+![You and your agent plan and review; the MCP delegate tool hands the brief to agy, which implements with Gemini models and edits your workspace; a clean result comes back with what changed, which files, and the plan, for your agent to review](assets/flow.png)
+
+![Delegate result payload](assets/result-json.png)
 
 ## Features
 
