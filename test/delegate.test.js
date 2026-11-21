@@ -1484,3 +1484,16 @@ test("text sent while a tool ran is dropped once the tool finishes and a final m
   assert.equal(out.resultSource, undefined);
   assert.equal(out.protocolWarnings, undefined);
 });
+
+// The same unfinished-call shape, captured live once through the bridge: agy put its clarifying
+// question to ask_question and ended the turn waiting for the answer.
+test("a question agy leaves open through ask_question comes back as the result", async () => {
+  const question = "Which variable would you like to rename, and what should its new name be?\n- [1] Rename 'x' in a.js\n- [2] Rename 'y' in b.js";
+  const out = await replayResult([
+    { sessionUpdate: "tool_call", toolCallId: "q1", title: "Run ask_question", kind: "other", status: "in_progress" },
+    msgChunk(question),
+  ]);
+  assert.equal(out.result, question);
+  assert.equal(out.resultSource, "unfinished-tool");
+  assert.ok(out.protocolWarnings.some((w) => /still running \(Run ask_question\)/.test(w) && /a resume answers/.test(w)));
+});

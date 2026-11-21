@@ -423,15 +423,16 @@ export async function runDelegate({
       : "none";
     const protocolWarnings = [];
     if (!finalMessageAvailable && state.activeToolCalls.size > 0) {
-      // agy moves a shell command that runs past about 12 s to the background and ends the turn
-      // with the call unfinished. The bridge stops agy when the delegation returns, and the
-      // command stops with it (measured with agy 1.5.14), so the caller has to hear about it.
+      // agy ends a turn with a call unfinished in two measured cases (agy 1.5.14): it moves a
+      // shell command that runs past about 12 s to the background, or it waits on ask_question.
+      // The bridge stops agy when the delegation returns, so a backgrounded command stops with it.
       result = state.unfinishedToolText;
       resultSource = result ? "unfinished-tool" : "none";
       protocolWarnings.push(
-        `the turn ended while a tool call was still running (${state.lastToolLabel ?? "unnamed tool"}).`
-        + " agy moves a shell command that runs past about 12 s to the background and ends the turn;"
-        + " that command stops when the bridge stops agy at the end of the delegation."
+        `the turn ended with a tool call still running (${state.lastToolLabel ?? "unnamed tool"}).`
+        + " agy does this when it moves a shell command that runs past about 12 s to the background —"
+        + " the command stops when the bridge stops agy — and when it asks a question (ask_question),"
+        + " which a resume answers."
         + (result ? " result is agy's message from while it ran." : " agy sent no message while it ran.")
       );
     } else if (!finalMessageAvailable && state.discardedResult) {
