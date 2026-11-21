@@ -11,7 +11,7 @@ rl.on("line", (line) => {
     return out({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
   }
   if (m.method === "session/new") {
-    return out({ jsonrpc: "2.0", id: m.id, result: { sessionId: "sess-silent", models: { currentModelId: "composer-2.5" }, configOptions: [] } });
+    return out({ jsonrpc: "2.0", id: m.id, result: { sessionId: "sess-silent", models: { currentModelId: "gemini-4-neon-high" }, configOptions: [] } });
   }
   if (m.method === "session/set_model") return out({ jsonrpc: "2.0", id: m.id, result: {} });
   if (m.method === "session/set_config_option") return out({ jsonrpc: "2.0", id: m.id, result: {} });

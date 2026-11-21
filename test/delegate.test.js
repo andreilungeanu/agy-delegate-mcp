@@ -1,0 +1,1440 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import process from "node:process";
+import path from "node:path";
+import { EventEmitter } from "node:events";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { chmodSync, writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { z } from "zod";
+import { AcpClient } from "../src/acp-client.js";
+import { runDelegate as rawRunDelegate } from "../src/delegate.js";
+import { delegateOutputShape } from "../src/server.js";
+
+// Every result this suite produces is parsed against a strict copy of delegateOutputShape.
+// Nothing else checks it: the shape is not declared to hosts, so a field added here but
+// forgotten there would drift undocumented and no other test would notice.
+const strictOutput = z.object(delegateOutputShape).strict();
+const runDelegate = async (opts) => {
+  const out = await rawRunDelegate(opts);
+  strictOutput.parse(out);
+  return out;
+};
+
+// A stub agent that completes an empty turn. Every factory below starts from this and
+// overwrites only the methods its test exercises, so the ACP surface is declared once:
+// adding a method to AcpClient means editing one place, not every stub.
+function stubClient(sessionId = "sess") {
+  const client = new EventEmitter();
+  client.start = async () => {};
+  client.initialize = async () => {};
+  client.newSession = async () => ({ sessionId });
+  client.resumeSession = async () => ({ sessionId });
+  client.listSessions = async () => ({ sessions: [] });
+  client.setModel = async () => {};
+  client.setConfigOption = async () => {};
+  client.setMode = async () => {};
+  client.prompt = async () => ({ stopReason: "end_turn" });
+  client.getTranscript = () => "";
+  client.stop = () => {};
+  return client;
+}
+
+function thinkingFactory() {
+  return () => {
+    const client = stubClient("sess-think");
+    client.prompt = async () => {
+      client.emit("update", { update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "SECRET-THOUGHT: planning" } } });
+      client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Edit File", kind: "edit", status: "pending" } });
+      client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" } });
+      client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+      return { stopReason: "end_turn" };
+    };
+    return client;
+  };
+}
+
+function fakeFactory() {
+  return new AcpClient({
+    spawnSpec: {
+      command: process.execPath,
+      args: [fileURLToPath(new URL("./fixtures/fake-acp.js", import.meta.url))],
+      options: { shell: false },
+    },
+  });
+}
+
+// A real spawn, not a stub emit: the crash this covers depends on where the frame is handled.
+// A stub calling client.emit() from inside prompt() has its throw caught by the prompt promise
+// and only fails that delegation. Off the wire the same throw runs in the readline callback,
+// where nothing is awaiting it — an uncaught exception that takes the MCP server down.
+function malformedContentFactory() {
+  return new AcpClient({
+    spawnSpec: {
+      command: process.execPath,
+      args: [fileURLToPath(new URL("./fixtures/malformed-content-acp.js", import.meta.url))],
+      options: { shell: false },
+    },
+  });
+}
+
+for (const scenario of ["non-object", "blocks"]) {
+  test(`malformed ACP ${scenario} cannot terminate the bridge process`, () => {
+    const runner = fileURLToPath(new URL("./fixtures/malformed-frame-runner.js", import.meta.url));
+    const child = spawnSync(process.execPath, [runner, scenario], { encoding: "utf8", timeout: 10000 });
+    assert.equal(child.status, 0, child.stderr || child.error?.message);
+    const out = strictOutput.parse(JSON.parse(child.stdout));
+    assert.equal(out.result, "done");
+    if (scenario === "blocks") {
+      assert.deepEqual(out.filesReportedByEditTools, ["valid.txt"]);
+      assert.equal(out.protocolWarnings.length, 1, "malformed blocks share one diagnostic");
+      assert.match(out.protocolWarnings[0], /tool content.*dropped/);
+    }
+  });
+}
+
+// hardCapMs keeps the failure fast. Without the guard this test does not fail, it hangs: the
+// throw escapes the readline callback, so the end_turn reply on the next line is never read and
+// the turn runs to the cap — an hour on the default.
+test("a tool_call_update whose content is an object is ignored, not fatal", async () => {
+  const out = await runDelegate({ workspace: process.cwd(),
+    spec: "task",
+    clientFactory: malformedContentFactory,
+    hardCapMs: 8000,
+  });
+  assert.equal(out.result, "done");
+  // The frame named a path, but it arrived in a shape ACP does not define. Nothing is reported
+  // rather than reaching into it, and the turn still completes.
+  assert.equal(out.filesReportedByEditTools, undefined);
+});
+
+// A stale non-terminal re-send for an already-completed tool call used to restart collection,
+// demoting the collected final message to discardedResult and mislabeling it pre-tool-fallback.
+function staleUpdateFactory() {
+  const client = stubClient("sess-stale");
+  client.prompt = async () => {
+    client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Edit File", kind: "edit", status: "pending" } });
+    client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" } });
+    client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "final" } } });
+    client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress" } });
+    return { stopReason: "end_turn" };
+  };
+  return client;
+}
+
+test("a stale non-terminal update for a finished tool call keeps the final message", async () => {
+  const out = await runDelegate({ workspace: process.cwd(), spec: "task", clientFactory: staleUpdateFactory });
+  assert.equal(out.result, "final");
+  assert.equal(out.resultSource, undefined);
+  assert.equal(out.protocolWarnings, undefined);
+});
+
+function oversizedFactory() {
+  const client = stubClient("sess-big");
+  client.prompt = async () => {
+    // One byte over the former 10MB cap — the stream is unbounded here, so this must arrive whole.
+    const OVER_CAP = 10 * 1024 * 1024 + 1;
+    client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: "x".repeat(OVER_CAP) } } });
+    return { stopReason: "end_turn" };
+  };
+  return client;
+}
+
+test("runDelegate returns assembled result for a fresh session", async () => {
+  const out = await runDelegate({ spec: "do the thing", mode: "agent", workspace: process.cwd(), clientFactory: fakeFactory });
+  assert.equal(out.stopReason, undefined);
+  assert.equal(out.sessionId, "sess-1");
+  assert.equal(out.result, "done");
+  assert.equal(out.resultSource, undefined);
+  assert.equal(out.resumed, undefined);
+  assert.equal(out.plan, undefined);
+  assert.deepEqual(out.filesReportedByEditTools, ["hello.txt"]);
+});
+
+test("runDelegate omits filesReportedByEditTools in plan mode when no diff events arrive", async () => {
+  const out = await runDelegate({ spec: "draft a plan", mode: "plan", workspace: process.cwd(), clientFactory: fakeFactory });
+  assert.equal(out.filesReportedByEditTools, undefined, "absence, not an empty list, means nothing was reported");
+});
+
+function rpcError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+test("runDelegate leaves an existing reason alone and tags nothing without an rpc code", async () => {
+  const factory = () => {
+    const client = stubClient();
+    client.start = async () => { throw new Error("spawn failed"); };
+    return client;
+  };
+  await assert.rejects(
+    runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: factory }),
+    (err) => {
+      assert.equal(err.reason, undefined);
+      return true;
+    }
+  );
+  await assert.rejects(
+    runDelegate({
+      spec: "task", model: "no-such-model", workspace: process.cwd(),
+      clientFactory: modelOptionsFactory(["gemini-4-neon"]),
+    }),
+    (err) => {
+      assert.equal(err.reason, "unknown-model");
+      return true;
+    }
+  );
+});
+
+test("runDelegate surfaces the agent-assigned title as progress, not in the result", async () => {
+  const progress = [];
+  const factory = () => {
+    const client = stubClient("sess-titled");
+    client.prompt = async () => {
+      client.emit("update", { update: { sessionUpdate: "session_info_update", title: "File Creator" } });
+      client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } } });
+      return { stopReason: "end_turn" };
+    };
+    return client;
+  };
+  const out = await runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: factory, onProgress: (m) => progress.push(m) });
+  // The title is a live label (and timeout forensics); in the result it arrives too late to
+  // help and has been measured contradicting the answer.
+  assert.equal(out.sessionTitle, undefined);
+  assert.ok(progress.includes("turn titled: File Creator"), `expected title progress line, got ${JSON.stringify(progress)}`);
+  assert.equal(out.result, "done");
+});
+
+// agy's plan-mode turn: a write_file carrying ArtifactMetadata (shape from
+// docs/captures/plan-mode.jsonl), then a short message pointing at the file.
+const PLAN_PATH = path.join(tmpdir(), "brain", "sess-plan", "plan_add_changelog.md");
+const PLAN_CONTENT = "# Plan\n\n1. Create CHANGELOG.md";
+function planArtifactFactory({ message = "I have created the implementation plan artifact.", trailingTool = false } = {}) {
+  return () => {
+    const client = stubClient("sess-plan");
+    client.prompt = async () => {
+      const input = {
+        ArtifactMetadata: { RequestFeedback: true, Summary: "Add a changelog file", UserFacing: true },
+        Content: PLAN_CONTENT,
+        Overwrite: true,
+        Path: PLAN_PATH,
+      };
+      client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "w1", name: "write_file", kind: "edit", status: "in_progress", rawInput: input, args: input } });
+      client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "w1", name: "write_file", kind: "edit", status: "completed", rawInput: input, args: input,
+        content: [{ type: "diff", path: "/" + PLAN_PATH.split(path.sep).join("/"), oldText: "", newText: input.Content }] } });
+      client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: message } } });
+      if (trailingTool) {
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "tool", status: "pending" } });
+        client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" } });
+      }
+      return { stopReason: "end_turn" };
+    };
+    return client;
+  };
+}
+
+test("plan mode returns the plan artifact as plan, the message as result, and no edited files", async () => {
+  const out = await runDelegate({ spec: "plan it", mode: "plan", workspace: process.cwd(), clientFactory: planArtifactFactory() });
+  assert.equal(out.result, "I have created the implementation plan artifact.");
+  assert.deepEqual(out.plan, { path: PLAN_PATH, overview: "Add a changelog file", detail: PLAN_CONTENT });
+  assert.equal(out.filesReportedByEditTools, undefined, "the artifact is agy's file, not a workspace edit");
+  assert.equal(out.artifacts, undefined);
+});
+
+test("agent mode lists an artifact by path and summary, without its content", async () => {
+  const out = await runDelegate({ spec: "do it", mode: "agent", workspace: process.cwd(), clientFactory: planArtifactFactory() });
+  assert.equal(out.plan, undefined);
+  assert.deepEqual(out.artifacts, [{ path: PLAN_PATH, summary: "Add a changelog file" }]);
+  assert.equal(out.filesReportedByEditTools, undefined);
+});
+
+test("runDelegate falls back to the pre-tool preamble when a trailing tool leaves no final message", async () => {
+  const out = await runDelegate({
+    spec: "plan it", mode: "plan", workspace: process.cwd(),
+    clientFactory: planArtifactFactory({ message: "Reviewing the code.", trailingTool: true }),
+  });
+  assert.equal(out.result, "Reviewing the code.");
+  assert.equal(out.resultSource, "pre-tool-fallback");
+  assert.equal(out.plan.detail, PLAN_CONTENT);
+  assert.ok(out.protocolWarnings.some((w) => /never spoke again/.test(w)));
+});
+
+test("runDelegate does not fold reasoning (thinking) into the result", async () => {
+  const progress = [];
+  const out = await runDelegate({
+    spec: "do the thing",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: thinkingFactory(),
+    onProgress: (m) => progress.push(m),
+  });
+  assert.equal(out.result, "done");
+  assert.ok(!out.result.includes("SECRET-THOUGHT"), "reasoning must not appear in the result");
+  assert.ok(progress.some((m) => m.startsWith("thinking:")), "expected thinking progress");
+  assert.ok(progress.some((m) => m.startsWith("running:")), "expected tool_call start progress");
+});
+
+test("runDelegate calls onProgress on agent message chunks and tool-call updates", async () => {
+  const progress = [];
+  const out = await runDelegate({
+    spec: "do the thing",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: fakeFactory,
+    onProgress: (msg) => progress.push(msg),
+  });
+  assert.equal(out.result, "done");
+  assert.ok(progress.some((m) => m.includes("done")), "expected message-chunk progress");
+  assert.ok(progress.some((m) => m.includes("editing hello.txt")), "expected tool-call progress");
+});
+
+const replayFactory = (updates) => () => {
+  const client = stubClient("sess-replay");
+  client.prompt = async () => {
+    for (const update of updates) client.emit("update", { update });
+    return { stopReason: "end_turn" };
+  };
+  return client;
+};
+
+const msgChunk = (text) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+const thoughtChunk = (text) => ({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text } });
+const toolCall = (toolCallId, status = "pending") => ({ sessionUpdate: "tool_call", toolCallId, title: "tool", status });
+const toolUpdate = (toolCallId, status) => ({ sessionUpdate: "tool_call_update", toolCallId, status });
+
+async function replayResult(updates) {
+  return runDelegate({
+    spec: "do the thing",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: replayFactory(updates),
+  });
+}
+
+async function collectProgress(updates, opts = {}) {
+  const progress = [];
+  await runDelegate({
+    spec: "do the thing",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: replayFactory(updates),
+    onProgress: (m) => progress.push(m),
+    ...opts,
+  });
+  return progress;
+}
+
+test("runDelegate joins streamed fragments into complete-sentence progress", async () => {
+  const progress = await collectProgress([
+    thoughtChunk("checking the call si"),
+    thoughtChunk("tes in src/api. Then the tests"),
+    msgChunk("Convert"),
+    msgChunk("ing getUser to asy"),
+    msgChunk("nc now. Updating expo"),
+    msgChunk("rts next"),
+  ]);
+  assert.ok(progress.includes("thinking: checking the call sites in src/api."), "thought fragments joined at sentence boundary");
+  assert.ok(progress.includes("agy: Converting getUser to async now."), "message fragments joined at sentence boundary");
+  assert.ok(progress.includes("agy: Updating exports next"), "trailing buffer flushed at end of turn");
+  assert.ok(!progress.some((m) => m.includes("asy") && !m.includes("async")), "no mid-word fragments emitted");
+});
+
+test("runDelegate splits thought summaries that arrive with no separator", async () => {
+  const progress = await collectProgress([
+    thoughtChunk("This mismatch prevents the utility from receiving its expected input."),
+    thoughtChunk("A concrete bug was identified in write-settings-conf."),
+    thoughtChunk("The script only reads from standard input."),
+  ]);
+  assert.ok(progress.includes("thinking: This mismatch prevents the utility from receiving its expected input."), "first summary emits as its own line");
+  assert.ok(!progress.some((m) => m.includes("input.A")), "no jammed sentence boundaries");
+});
+
+test("runDelegate throttles progress: newest sentence wins, middle ones drop", async () => {
+  const progress = await collectProgress(
+    [msgChunk("First point. Second point. Third point. ")],
+    { progressThrottleMs: 60000 },
+  );
+  assert.ok(progress.includes("agy: First point."), "first sentence emits immediately");
+  assert.ok(!progress.includes("agy: Second point."), "throttled middle sentence is dropped");
+  assert.ok(progress.includes("agy: Third point."), "latest pending sentence flushes at end of turn");
+});
+
+test("runDelegate skips markdown structure in progress (tables, headings, fences, bullets)", async () => {
+  const progress = await collectProgress([
+    msgChunk("| Privileged ops | 23 bash sbin scripts |\n"),
+    msgChunk("## Assessment\n"),
+    msgChunk("```\ncode line\n```\n"),
+    msgChunk("- bullet item\n"),
+    msgChunk("The build script downloads binaries without checksums.\n"),
+  ]);
+  assert.ok(!progress.some((m) => m.includes("Privileged ops")), "table rows are not progress");
+  assert.ok(!progress.some((m) => m.includes("Assessment")), "headings are not progress");
+  assert.ok(!progress.some((m) => m.includes("bullet item")), "bullets are not progress");
+  assert.ok(progress.includes("agy: The build script downloads binaries without checksums."), "prose still flows through");
+});
+
+test("runDelegate includes the tool location in running: progress when present", async () => {
+  const progress = await collectProgress([
+    { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read File", kind: "read", status: "pending", locations: [{ path: "src/api/user.js" }] },
+    { sessionUpdate: "tool_call", toolCallId: "t2", title: "grep", kind: "search", status: "pending", rawInput: {} },
+  ]);
+  assert.ok(progress.includes("running: Read File — src/api/user.js"), "location path shown");
+  assert.ok(progress.includes("running: grep"), "bare label when the agent sends no location");
+});
+
+test("a multi-line tool title is reported as one line", async () => {
+  // A terminal tool's title is the command the agent sent, and it sends a multi-line script
+  // verbatim. Both readers of this take one line: the progress notification, and the "last tool
+  // call" line a stall error carries.
+  const title = ["npm run build", "  --workspace=api", "", "  --silent"].join("\n");
+  const progress = await collectProgress([
+    { sessionUpdate: "tool_call", toolCallId: "t1", title, kind: "execute", status: "pending" },
+  ]);
+  const line = progress.find((m) => m.startsWith("running: "));
+  assert.ok(line, "the tool call must be reported");
+  assert.ok(!/[\r\n]/.test(line), `the reported command must be one line, got ${JSON.stringify(line)}`);
+  assert.equal(line, "running: npm run build --workspace=api --silent");
+});
+
+test("runDelegate returns the complete stream when the turn uses no tools", async () => {
+  const out = await replayResult([msgChunk("Code:\n"), msgChunk("```js\nrun();\n```")]);
+  assert.equal(out.result, "Code:\n```js\nrun();\n```");
+  assert.equal(out.resultSource, undefined);
+});
+
+test("runDelegate returns only text emitted after the final tool completes", async () => {
+  const out = await replayResult([
+    msgChunk("', '', raw, flags=re.DOTALL).strip()\n"),
+    toolCall("edit-1"),
+    msgChunk("text emitted while the tool is active"),
+    toolUpdate("edit-1", "completed"),
+    msgChunk("Updated `sbin/setup-llm` and validated it."),
+  ]);
+  assert.equal(out.result, "Updated `sbin/setup-llm` and validated it.");
+  assert.equal(out.resultSource, undefined);
+});
+
+test("runDelegate discards text that is followed by another tool call", async () => {
+  const out = await replayResult([
+    msgChunk("Inspecting the implementation."),
+    toolCall("read-1"),
+    toolUpdate("read-1", "completed"),
+    msgChunk("Found the likely issue; checking callers."),
+    toolCall("search-1"),
+    toolUpdate("search-1", "completed"),
+    msgChunk("The callers are updated and tests pass."),
+  ]);
+  assert.equal(out.result, "The callers are updated and tests pass.");
+  assert.equal(out.resultSource, undefined);
+});
+
+test("runDelegate waits for all active tools before collecting final text", async () => {
+  const out = await replayResult([
+    toolCall("read-1"),
+    toolCall("read-2"),
+    toolUpdate("read-1", "completed"),
+    msgChunk("one tool is still active"),
+    toolUpdate("read-2", "completed"),
+    msgChunk("Both reads completed; here is the answer."),
+  ]);
+  assert.equal(out.result, "Both reads completed; here is the answer.");
+  assert.equal(out.resultSource, undefined);
+});
+
+// This shape used to return "" with stopReason end_turn and no error. The discarded text is
+// as often the whole answer as a preamble, so label it, warn, and return it.
+test("runDelegate falls back to the last message when a tool call ends the turn", async () => {
+  const out = await replayResult([
+    msgChunk("I will make the edit."),
+    toolCall("edit-1"),
+    toolUpdate("edit-1", "completed"),
+  ]);
+  assert.equal(out.result, "I will make the edit.");
+  assert.equal(out.resultSource, "pre-tool-fallback");
+  assert.ok(out.protocolWarnings.some((w) => /never spoke again/.test(w)), "the fallback is disclosed");
+});
+
+test("runDelegate falls back to the answer, not the preamble, when both were discarded", async () => {
+  const out = await replayResult([
+    msgChunk("Inspecting the implementation."),
+    toolCall("read-1"),
+    toolUpdate("read-1", "completed"),
+    msgChunk("The parser drops the trailing byte."),
+    toolCall("verify-1"),
+    toolUpdate("verify-1", "completed"),
+  ]);
+  assert.equal(out.result, "The parser drops the trailing byte.");
+  assert.equal(out.resultSource, "pre-tool-fallback");
+});
+
+test("runDelegate warns rather than returning a bare empty success", async () => {
+  const out = await replayResult([toolCall("edit-1"), toolUpdate("edit-1", "completed")]);
+  assert.equal(out.result, "");
+  assert.equal(out.resultSource, "none");
+  assert.ok(out.protocolWarnings.some((w) => /without emitting any message/.test(w)));
+});
+
+test("runDelegate prefers a real final message over the fallback", async () => {
+  const out = await replayResult([
+    msgChunk("I will make the edit."),
+    toolCall("edit-1"),
+    toolUpdate("edit-1", "completed"),
+    msgChunk("Edited the parser."),
+  ]);
+  assert.equal(out.result, "Edited the parser.");
+  assert.equal(out.resultSource, undefined);
+  assert.ok(!(out.protocolWarnings || []).some((w) => /never spoke again/.test(w)));
+});
+
+test("runDelegate keeps the final message when a duplicate terminal tool update arrives late", async () => {
+  const out = await replayResult([
+    toolCall("edit-1"),
+    toolUpdate("edit-1", "completed"),
+    msgChunk("Fixed the parser and added a regression test."),
+    toolUpdate("edit-1", "completed"),
+  ]);
+  assert.equal(out.result, "Fixed the parser and added a regression test.");
+  assert.equal(out.resultSource, undefined);
+});
+
+test("runDelegate preserves a legitimate code-only final response", async () => {
+  const code = "```js\nexport const answer = 42;\n```";
+  const out = await replayResult([
+    toolCall("read-1"),
+    toolUpdate("read-1", "completed"),
+    msgChunk(code),
+  ]);
+  assert.equal(out.result, code);
+  assert.equal(out.resultSource, undefined);
+});
+
+test("runDelegate survives a throwing onProgress callback", async () => {
+  const out = await runDelegate({
+    spec: "do the thing",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: fakeFactory,
+    onProgress: () => { throw new Error("progress boom"); },
+  });
+  assert.equal(out.result, "done");
+});
+
+function promptTextFactory(track) {
+  return () => {
+    const client = fakeFactory();
+    const origPrompt = client.prompt.bind(client);
+    client.prompt = async (sessionId, blocks) => {
+      track.blocks = blocks;
+      track.promptText = blocks.find((b) => b.type === "text")?.text;
+      return origPrompt(sessionId, blocks);
+    };
+    return client;
+  };
+}
+
+test("runDelegate sends only a text block when no contextFiles are given", async () => {
+  const track = {};
+  await runDelegate({ spec: "do it", mode: "agent", workspace: process.cwd(), clientFactory: promptTextFactory(track) });
+  assert.deepEqual(track.blocks, [{ type: "text", text: "do it" }]);
+});
+
+test("runDelegate attaches contextFiles as resource_link blocks", async () => {
+  const track = {};
+  const out = await runDelegate({
+    spec: "review these",
+    mode: "agent",
+    workspace: process.cwd(),
+    contextFiles: ["package.json", path.join(process.cwd(), "src", "delegate.js")],
+    clientFactory: promptTextFactory(track),
+  });
+  assert.equal(track.blocks[0].type, "text");
+  const links = track.blocks.slice(1);
+  assert.equal(links.length, 2);
+  assert.deepEqual(links.map((l) => l.type), ["resource_link", "resource_link"]);
+  assert.deepEqual(links.map((l) => l.name), ["package.json", "delegate.js"]);
+  // Relative entries resolve against workspace, and both arrive as absolute file:// URIs.
+  assert.ok(links.every((l) => l.uri.startsWith("file:///")), JSON.stringify(links));
+  assert.match(links[0].uri, /\/package\.json$/);
+  assert.equal(out.protocolWarnings, undefined);
+});
+
+test("runDelegate deduplicates contextFiles that resolve to the same path", async () => {
+  const track = {};
+  const abs = path.join(process.cwd(), "package.json");
+  const out = await runDelegate({
+    spec: "review these",
+    mode: "agent",
+    workspace: process.cwd(),
+    contextFiles: ["package.json", "package.json", "./package.json", abs],
+    clientFactory: promptTextFactory(track),
+  });
+  const links = track.blocks.slice(1);
+  assert.equal(links.length, 1, "equivalent entries collapse to one link");
+  assert.match(links[0].uri, /\/package\.json$/);
+  assert.equal(out.protocolWarnings, undefined);
+});
+
+test("runDelegate deduplicates contextFiles that differ only by case", {
+  skip: process.platform === "win32" ? false : "case-insensitive fs",
+}, async () => {
+  const track = {};
+  const out = await runDelegate({
+    spec: "review these",
+    mode: "agent",
+    workspace: process.cwd(),
+    contextFiles: ["package.json", "PACKAGE.JSON"],
+    clientFactory: promptTextFactory(track),
+  });
+  const links = track.blocks.slice(1);
+  assert.equal(links.length, 1, "Win32 case variants must collapse to one link");
+  assert.match(links[0].uri, /package\.json$/i);
+  assert.equal(out.protocolWarnings, undefined);
+});
+
+test("runDelegate reports a missing contextFile instead of linking or failing", async () => {
+  const track = {};
+  const out = await runDelegate({
+    spec: "review these",
+    mode: "agent",
+    workspace: process.cwd(),
+    contextFiles: ["package.json", "no-such-file-here.txt"],
+    clientFactory: promptTextFactory(track),
+  });
+  assert.equal(out.stopReason, undefined);
+  assert.equal(track.blocks.length, 2, "the missing file must not be linked");
+  assert.ok(out.protocolWarnings.some((w) => /contextFile skipped: 1 not found under .* — no-such-file-here\.txt/.test(w)));
+});
+
+// One warning for the whole batch, not one each: a wrong workspace misses every attachment at
+// once, and a line apiece would repeat the same root for a single root cause.
+test("runDelegate groups every missing contextFile into one warning", async () => {
+  const track = {};
+  const missing = Array.from({ length: 20 }, (_, i) => `missing-${String(i + 1).padStart(2, "0")}.js`);
+  const out = await runDelegate({
+    spec: "review these",
+    mode: "agent",
+    workspace: process.cwd(),
+    contextFiles: ["package.json", ...missing],
+    clientFactory: promptTextFactory(track),
+  });
+  assert.equal(track.blocks.length, 2, "only the real file is linked");
+  assert.equal(out.protocolWarnings.length, 1, "20 missing files produce one warning, not 20");
+  const [warning] = out.protocolWarnings;
+  assert.match(warning, /^contextFiles skipped: 20 not found under /);
+  for (const name of missing) assert.ok(warning.includes(name), `${name} is named`);
+  // The workspace root is the diagnostic — stated once, not once per file.
+  assert.equal(warning.split(process.cwd()).length - 1, 1, "the root appears exactly once");
+});
+
+test("runDelegate skips a contextFile that is a directory", async () => {
+  const track = {};
+  const out = await runDelegate({
+    spec: "review these",
+    mode: "agent",
+    workspace: process.cwd(),
+    contextFiles: ["src"],
+    clientFactory: promptTextFactory(track),
+  });
+  assert.equal(track.blocks.length, 1);
+  assert.ok(out.protocolWarnings.some((w) => /contextFile src skipped: not a file/.test(w)));
+});
+
+// Smallest valid PNG bytes; only the extension and the capability gate are under test.
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64"
+);
+
+function imageCapableFactory(track, { image = true } = {}) {
+  return () => {
+    const client = fakeFactory();
+    const origInit = client.initialize.bind(client);
+    client.initialize = async () => {
+      const res = await origInit();
+      client.agentCapabilities = { promptCapabilities: { image } };
+      return res;
+    };
+    const origPrompt = client.prompt.bind(client);
+    client.prompt = async (sessionId, blocks) => {
+      track.blocks = blocks;
+      return origPrompt(sessionId, blocks);
+    };
+    return client;
+  };
+}
+
+test("runDelegate sends an image contextFile inline when the agent accepts images", async () => {
+  const imgPath = path.join(tmpdir(), `delegate-img-${process.pid}.png`);
+  writeFileSync(imgPath, TINY_PNG);
+  const track = {};
+  try {
+    const out = await runDelegate({
+      spec: "look at this", mode: "agent", workspace: process.cwd(),
+      contextFiles: [imgPath], clientFactory: imageCapableFactory(track),
+    });
+    assert.equal(track.blocks.length, 2);
+    assert.equal(track.blocks[1].type, "image");
+    assert.equal(track.blocks[1].mimeType, "image/png");
+    assert.equal(track.blocks[1].data, TINY_PNG.toString("base64"));
+    assert.equal(out.protocolWarnings, undefined);
+  } finally {
+    try { unlinkSync(imgPath); } catch {}
+  }
+});
+
+test("runDelegate skips an unreadable image and continues with the remaining attachments", {
+  skip: process.platform !== "win32" && process.getuid?.() === 0 ? "root bypasses file permissions" : false,
+}, async () => {
+  const imgPath = path.join(tmpdir(), `delegate-img-unreadable-${process.pid}.png`);
+  writeFileSync(imgPath, TINY_PNG);
+  let locker;
+  let closed;
+  const track = {};
+  try {
+    if (process.platform === "win32") {
+      const script = fileURLToPath(new URL("./fixtures/lock-file.ps1", import.meta.url));
+      // -File obeys the execution policy, and a default Windows client policy (Restricted) blocks
+      // every script.
+      locker = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, imgPath], {
+        stdio: ["pipe", "pipe", "pipe"], windowsHide: true, timeout: 10000,
+      });
+      closed = new Promise((resolve) => locker.once("close", resolve));
+      await new Promise((resolve, reject) => {
+        let stdout = "", stderr = "";
+        locker.stdout.on("data", (chunk) => {
+          stdout += chunk;
+          if (stdout.includes("locked")) resolve();
+        });
+        locker.stderr.on("data", (chunk) => { stderr += chunk; });
+        locker.once("error", reject);
+        locker.once("exit", (code) => reject(new Error(`file locker exited ${code}: ${stderr}`)));
+      });
+    } else {
+      chmodSync(imgPath, 0);
+    }
+    const out = await runDelegate({
+      spec: "look at this", workspace: process.cwd(), contextFiles: [imgPath, "package.json"],
+      clientFactory: imageCapableFactory(track), hardCapMs: 5000,
+    });
+    assert.equal(out.result, "done");
+    assert.deepEqual(track.blocks.map((block) => block.type), ["text", "resource_link"]);
+    assert.equal(track.blocks[1].name, "package.json");
+    assert.equal(out.protocolWarnings.length, 1);
+    assert.match(out.protocolWarnings[0], /contextFile .* skipped: could not read image/);
+  } finally {
+    if (locker) {
+      locker.stdin.end("\n");
+      await closed;
+    } else {
+      chmodSync(imgPath, 0o600);
+    }
+    unlinkSync(imgPath);
+  }
+});
+
+test("runDelegate skips an image when the agent does not advertise image prompts", async () => {
+  const imgPath = path.join(tmpdir(), `delegate-img-nocap-${process.pid}.png`);
+  writeFileSync(imgPath, TINY_PNG);
+  const track = {};
+  try {
+    const out = await runDelegate({
+      spec: "look at this", mode: "agent", workspace: process.cwd(),
+      contextFiles: [imgPath], clientFactory: imageCapableFactory(track, { image: false }),
+    });
+    // Silently sending it would vanish without error, so it must be dropped and reported.
+    assert.equal(track.blocks.length, 1);
+    assert.ok(out.protocolWarnings.some((w) => /does not accept image prompts/.test(w)));
+  } finally {
+    try { unlinkSync(imgPath); } catch {}
+  }
+});
+
+test("runDelegate rejects a workspace that does not exist", async () => {
+  const track = {};
+  await assert.rejects(
+    runDelegate({
+      spec: "do it",
+      mode: "agent",
+      workspace: path.join(process.cwd(), "no_such_dir_12345"),
+      clientFactory: promptTextFactory(track),
+    }),
+    (err) => err.reason === "invalid-workspace" && /does not exist/.test(err.message),
+  );
+  assert.equal(track.promptText, undefined, "rejected before the agent was spawned");
+});
+
+test("runDelegate rejects a workspace that is a file", async () => {
+  await assert.rejects(
+    runDelegate({
+      spec: "do it",
+      mode: "agent",
+      workspace: fileURLToPath(import.meta.url),
+      clientFactory: promptTextFactory({}),
+    }),
+    (err) => err.reason === "invalid-workspace" && /is not a directory/.test(err.message),
+  );
+});
+
+test("runDelegate rejects a blank spec before spending a session", async () => {
+  const track = {};
+  await assert.rejects(
+    runDelegate({
+      spec: "   \n\t ",
+      mode: "agent",
+      workspace: process.cwd(),
+      clientFactory: promptTextFactory(track),
+    }),
+    (err) => err.reason === "invalid-spec" && /empty/.test(err.message),
+  );
+  assert.equal(track.promptText, undefined, "rejected before the agent was spawned");
+});
+
+test("runDelegate sends a brief that names a path as written", async () => {
+  const track = {};
+  await runDelegate({
+    spec: "fix the bug in missing/brief.md",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: promptTextFactory(track),
+  });
+  assert.equal(track.promptText, "fix the bug in missing/brief.md");
+});
+
+// The contract spec-as-path used to break: a brief is the prompt, whatever it looks like. This
+// pins the case the old path detection got wrong — a spec that is itself an existing file name.
+test("runDelegate sends a spec literally even when a file of that name exists", async () => {
+  const inlineSpec = "brief.md";
+  const specPath = path.join(process.cwd(), inlineSpec);
+  writeFileSync(specPath, "file contents must not be used\n");
+  const track = {};
+  try {
+    await runDelegate({
+      spec: inlineSpec,
+      mode: "agent",
+      workspace: process.cwd(),
+      clientFactory: promptTextFactory(track),
+    });
+    assert.equal(track.promptText, inlineSpec);
+  } finally {
+    try { unlinkSync(specPath); } catch {}
+  }
+});
+
+function exitDuringPromptFactory() {
+  return () => {
+    const client = fakeFactory();
+    client.prompt = () => new Promise(() => {
+      client.emit("exit", { code: 1, signal: null, stderr: "boom-trace" });
+    });
+    return client;
+  };
+}
+
+test("runDelegate rejects promptly when agent exits during prompt", async () => {
+  const start = Date.now();
+  await assert.rejects(
+    () => runDelegate({
+      spec: "do the thing",
+      mode: "agent",
+      workspace: process.cwd(),
+      clientFactory: exitDuringPromptFactory(),
+    }),
+    (err) => {
+      assert.equal(err.reason, "agent-exit");
+      assert.match(err.message, /agent exited \(code=1\)/);
+      assert.match(err.message, /boom-trace/);
+      return true;
+    }
+  );
+  assert.ok(Date.now() - start < 2000, "expected fail-fast rejection, not full timeout");
+});
+
+test("runDelegate returns output above the former 10MB cap verbatim", async () => {
+  const out = await runDelegate({
+    spec: "big task",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: () => oversizedFactory(),
+  });
+  // One byte over the former ceiling, delivered whole — model output is bounded by the
+  // model's own token limit, so there is nothing left to guard against.
+  assert.equal(out.result.length, 10 * 1024 * 1024 + 1);
+  assert.ok(!out.result.includes("[output truncated"));
+});
+
+function failingPromptFactory() {
+  return () => {
+    const client = fakeFactory();
+    client.prompt = async () => { throw new Error("prompt failed"); };
+    return client;
+  };
+}
+
+test("runDelegate leaves the ACP transcript out of the error by default", async () => {
+  delete process.env.AGY_DELEGATE_TRANSCRIPT;
+  await assert.rejects(
+    () => runDelegate({
+      spec: "do the thing",
+      mode: "agent",
+      workspace: process.cwd(),
+      clientFactory: failingPromptFactory(),
+    }),
+    (err) => {
+      assert.match(err.message, /prompt failed/);
+      assert.doesNotMatch(err.message, /recent ACP transcript/);
+      return true;
+    }
+  );
+});
+
+test("runDelegate appends the transcript when AGY_DELEGATE_TRANSCRIPT is set", async () => {
+  process.env.AGY_DELEGATE_TRANSCRIPT = "12";
+  try {
+    await assert.rejects(
+      () => runDelegate({
+        spec: "do the thing",
+        mode: "agent",
+        workspace: process.cwd(),
+        clientFactory: failingPromptFactory(),
+      }),
+      (err) => {
+        assert.match(err.message, /prompt failed/);
+        assert.match(err.message, /--- recent ACP transcript \(last 12 frames\) ---/);
+        assert.match(err.message, / out /);
+        assert.match(err.message, / in /);
+        return true;
+      }
+    );
+  } finally {
+    delete process.env.AGY_DELEGATE_TRANSCRIPT;
+  }
+});
+
+// The same variable is read twice — recording in jsonrpc.js, attachment here. A non-numeric
+// value must read as on at the default depth in both places, not on in one and off in the other.
+test("runDelegate appends the transcript when AGY_DELEGATE_TRANSCRIPT is a non-numeric string", async () => {
+  process.env.AGY_DELEGATE_TRANSCRIPT = "true";
+  try {
+    await assert.rejects(
+      () => runDelegate({
+        spec: "do the thing",
+        mode: "agent",
+        workspace: process.cwd(),
+        clientFactory: failingPromptFactory(),
+      }),
+      (err) => {
+        assert.match(err.message, /--- recent ACP transcript \(last 50 frames\) ---/);
+        return true;
+      }
+    );
+  } finally {
+    delete process.env.AGY_DELEGATE_TRANSCRIPT;
+  }
+});
+
+function scriptedFactory({ stopReason = "end_turn", message = "plan ready" }) {
+  return () => {
+    const client = stubClient("sess-scripted");
+    client.prompt = async () => {
+      client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: message } } });
+      return { stopReason };
+    };
+    return client;
+  };
+}
+
+test("runDelegate surfaces a stop reason that is not end_turn", async () => {
+  const out = await runDelegate({
+    spec: "do the thing",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: scriptedFactory({ stopReason: "refusal", message: "no" }),
+  });
+  assert.equal(out.stopReason, "refusal");
+});
+
+test("runDelegate drops a non-string stopReason with a protocol warning", async () => {
+  const out = await runDelegate({
+    spec: "do the thing",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: scriptedFactory({ stopReason: { code: 7 }, message: "done" }),
+  });
+  assert.equal(out.stopReason, undefined);
+  assert.equal(out.result, "done");
+  assert.deepEqual(out.protocolWarnings, ["stopReason dropped: ACP requires a string stop reason"]);
+});
+
+test("runDelegate omits protocolWarnings when frames are well-formed", async () => {
+  const out = await runDelegate({
+    spec: "do it",
+    mode: "agent",
+    workspace: process.cwd(),
+    clientFactory: scriptedFactory({ message: "done" }),
+  });
+  assert.equal(out.protocolWarnings, undefined);
+});
+
+function abortablePromptFactory({ onAbortReady, track }) {
+  return () => {
+    const client = stubClient("sess-abort");
+    client.cancel = async () => {};
+    client.child = { pid: null, exitCode: null, signalCode: null, kill() {} };
+    client.prompt = () => new Promise((resolve) => { onAbortReady?.(resolve); });
+    client.stop = () => { track.stopped = true; };
+    return client;
+  };
+}
+
+test("runDelegate rejects with aborted when signal fires during prompt", async () => {
+  const track = {};
+  const ac = new AbortController();
+  let resolvePrompt;
+  const run = runDelegate({
+    spec: "task",
+    mode: "agent",
+    workspace: process.cwd(),
+    signal: ac.signal,
+    clientFactory: abortablePromptFactory({
+      track,
+      onAbortReady: (resolve) => { resolvePrompt = resolve; },
+    }),
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  ac.abort();
+  await assert.rejects(run, (err) => {
+    assert.equal(err.reason, "aborted");
+    return true;
+  });
+  assert.equal(track.stopped, true);
+  resolvePrompt?.({ stopReason: "end_turn" });
+});
+
+test("runDelegate rejects immediately when signal is already aborted", async () => {
+  const ac = new AbortController();
+  ac.abort();
+  let factoryCalls = 0;
+  await assert.rejects(
+    () => runDelegate({
+      spec: "task",
+      mode: "agent",
+      workspace: process.cwd(),
+      signal: ac.signal,
+      clientFactory: () => { factoryCalls++; return new EventEmitter(); },
+    }),
+    (err) => {
+      assert.equal(err.reason, "aborted");
+      return true;
+    }
+  );
+  assert.equal(factoryCalls, 0);
+});
+
+function hangingFactory({ emit, title, resumeFails } = {}) {
+  return () => {
+    const client = stubClient("sess-forensics");
+    client.resumeSession = async () => {
+      if (resumeFails) throw rpcError(-32603, "Failed to read session stale-id; retry, or load it with session/load");
+    };
+    client.cancel = async () => {};
+    client.prompt = () => {
+      if (title) client.emit("update", { update: { sessionUpdate: "session_info_update", title } });
+      emit?.(client);
+      return new Promise(() => {});
+    };
+    return client;
+  };
+}
+
+// The advice must name the knob that fired: raising the hard cap does nothing when the
+// idle guard tripped.
+test("idle-timeout error advises AGY_DELEGATE_IDLE_MS, not the hard cap", async () => {
+  await assert.rejects(
+    () => runDelegate({
+      spec: "hang",
+      workspace: process.cwd(),
+      clientFactory: hangingFactory(),
+      handshakeMs: 10000,
+      idleMs: 300,
+      heartbeatMs: 0,
+    }),
+    (err) => {
+      assert.equal(err.reason, "idle-timeout");
+      assert.match(err.message, /raise AGY_DELEGATE_IDLE_MS/);
+      assert.ok(!/AGY_DELEGATE_HARD_CAP_MS/.test(err.message), "the hard cap is the wrong knob here");
+      return true;
+    }
+  );
+});
+
+test("timeout error names the turn and a resume that had already failed", async () => {
+  await assert.rejects(
+    () => runDelegate({
+      spec: "hang",
+      resumeSessionId: "stale-id",
+      workspace: process.cwd(),
+      clientFactory: hangingFactory({ title: "Auth Refactor", resumeFails: true }),
+      handshakeMs: 10000,
+      hardCapMs: 300,
+      heartbeatMs: 0,
+    }),
+    (err) => {
+      assert.match(err.message, /titled this turn "Auth Refactor"/);
+      assert.match(err.message, /resuming stale-id had already failed \(agy has no session stale-id\)/);
+      assert.match(err.message, /none of that earlier work was in context/);
+      assert.match(err.message, /Resume with resumeSessionId sess-forensics/);
+      return true;
+    }
+  );
+});
+
+test("timeout error stays quiet about resume and title when neither applies", async () => {
+  await assert.rejects(
+    () => runDelegate({
+      spec: "hang",
+      workspace: process.cwd(),
+      clientFactory: hangingFactory(),
+      handshakeMs: 10000,
+      hardCapMs: 300,
+      heartbeatMs: 0,
+    }),
+    (err) => {
+      assert.doesNotMatch(err.message, /titled this turn/);
+      assert.doesNotMatch(err.message, /had already failed/);
+      return true;
+    }
+  );
+});
+
+test("aborted error carries the same forensics as a timeout", async () => {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 150);
+  await assert.rejects(
+    () => runDelegate({
+      spec: "hang",
+      workspace: process.cwd(),
+      clientFactory: hangingFactory({ title: "Auth Refactor" }),
+      handshakeMs: 10000,
+      hardCapMs: 10000,
+      heartbeatMs: 0,
+      signal: controller.signal,
+    }),
+    (err) => {
+      assert.equal(err.reason, "aborted");
+      assert.match(err.message, /titled this turn "Auth Refactor"/);
+      assert.match(err.message, /Resume with resumeSessionId sess-forensics/);
+      assert.doesNotMatch(err.message, /does not stream shell output/);
+      return true;
+    }
+  );
+});
+
+// An edit tool_call carries title "Edit File" and no locations, so the file it touched is only
+// knowable from the diff frame that follows — which still feeds filesReportedByEditTools, in any
+// mode. (The mode is not an enforced boundary; the diff is the source of truth, so it is reported
+// the same whether the agent was asked to plan or to implement.)
+test("runDelegate reports a plan-mode edit via filesReportedByEditTools from its diff frame", async () => {
+  const out = await runDelegate({
+    spec: "plan it",
+    mode: "plan",
+    workspace: process.cwd(),
+    clientFactory: replayFactory([
+      { sessionUpdate: "tool_call", toolCallId: "e1", kind: "edit", title: "Edit File", status: "pending" },
+      { sessionUpdate: "tool_call_update", toolCallId: "e1", status: "completed",
+        content: [{ type: "diff", path: path.join(process.cwd(), "docs", "plan.md") }] },
+      msgChunk("Saved the plan."),
+    ]),
+  });
+  assert.deepEqual(out.filesReportedByEditTools, ["docs/plan.md"]);
+});
+
+test("a non-positive hard cap falls back to the default instead of firing instantly", async () => {
+  // Number("") is 0, so a blank env var used to arm a zero-length deadline that failed every
+  // call before the agent could answer. Only the idle guard gives 0 a meaning of its own.
+  const prev = process.env.AGY_DELEGATE_HARD_CAP_MS;
+  process.env.AGY_DELEGATE_HARD_CAP_MS = "0";
+  try {
+    const out = await runDelegate({ workspace: process.cwd(), spec: "hi", clientFactory: thinkingFactory(), heartbeatMs: 0 });
+    assert.equal(out.result, "done");
+  } finally {
+    if (prev === undefined) delete process.env.AGY_DELEGATE_HARD_CAP_MS;
+    else process.env.AGY_DELEGATE_HARD_CAP_MS = prev;
+  }
+});
+
+test("frames arriving after the prompt settles do not mutate the finished turn", async () => {
+  // A late tool_call_update carrying a diff used to be folded into the result while it was
+  // still being assembled across awaits.
+  let emitLate;
+  const clientFactory = () => {
+    const client = stubClient("sess-late");
+    client.prompt = async () => {
+      client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: "answer" } } });
+      emitLate = () => client.emit("update", {
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "late",
+          status: "completed",
+          content: [{ type: "diff", path: "ghost.js" }],
+        },
+      });
+      return { stopReason: "end_turn" };
+    };
+    return client;
+  };
+  const out = await runDelegate({
+    spec: "task",
+    workspace: process.cwd(),
+    clientFactory,
+    heartbeatMs: 0,
+    onProgress: () => emitLate?.(),
+  });
+  assert.equal(out.result, "answer");
+  assert.equal(out.filesReportedByEditTools, undefined, "a frame after the turn belongs to no turn");
+});
+
+test("a delegation without a workspace is refused before anything is spawned", async () => {
+  // The server's own cwd under npx or a plugin launch is a cache directory or the user's home,
+  // so a defaulted workspace put an auto-approved agent to work on a tree nobody asked about
+  // while every layer reported success.
+  let spawned = false;
+  const clientFactory = () => { spawned = true; return {}; };
+  for (const workspace of [undefined, "", "   "]) {
+    await assert.rejects(
+      () => runDelegate({ spec: "task", workspace, clientFactory }),
+      (err) => err.reason === "invalid-workspace" && /workspace is required/.test(err.message)
+    );
+  }
+  assert.equal(spawned, false, "the workspace check must run before the agent is spawned");
+});
+
+// agy's session options, shaped like session/new on 1.5.13: base model ids under "model", the
+// thinking level under "thought_level" (category thought_level), each model with its own levels.
+const AGY_LEVELS = { "gemini-4-neon": ["low", "medium", "high", "xhigh"], "gemini-3.8-flash": ["low", "medium", "high"], "claude-sonnet-5-5": ["low", "medium", "high"] };
+function agyOptions(model, thought, mode = "default", models = Object.keys(AGY_LEVELS)) {
+  return [
+    { id: "model", name: "Model", category: "model", currentValue: model, options: models.map((value) => ({ value })) },
+    { id: "thought_level", name: "Thinking Level", category: "thought_level", currentValue: thought, options: (AGY_LEVELS[model] || ["high"]).map((value) => ({ value })) },
+    { id: "mode", name: "Mode", category: "mode", currentValue: mode, options: ["default", "accept-edits", "auto", "plan"].map((value) => ({ value })) },
+  ];
+}
+
+// Records every config, mode and prompt call. Each set echoes the full option list the way agy
+// does, and a thinking level the model does not offer is refused with agy's -32602.
+function modelOptionsFactory(models = Object.keys(AGY_LEVELS), { opened = "gemini-4-neon", thought = "high", calls = [] } = {}) {
+  return () => {
+    const client = stubClient("sess-models");
+    let model = opened, level = thought;
+    client.newSession = async () => {
+      client.configOptions = agyOptions(model, level, "default", models);
+      return { sessionId: "sess-models" };
+    };
+    client.setConfigOption = async (_sid, configId, value) => {
+      calls.push(["config", configId, value]);
+      if (configId === "model") { model = value; if (!(AGY_LEVELS[model] || []).includes(level)) level = "high"; }
+      if (configId === "thought_level") {
+        if (!(AGY_LEVELS[model] || []).includes(value)) throw rpcError(-32602, `Thinking level "${value}" is not offered for model "${model}"`);
+        level = value;
+      }
+      return { configOptions: agyOptions(model, level, "default", models) };
+    };
+    client.setMode = async (_sid, modeId) => { calls.push(["mode", modeId]); };
+    client.prompt = async (_sid, blocks) => {
+      calls.push(["prompt", blocks[0].text]);
+      client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: "ok" } } });
+      return { stopReason: "end_turn" };
+    };
+    return client;
+  };
+}
+
+test("runDelegate rejects an unknown model before prompting and names agy's base ids", async () => {
+  const calls = [];
+  await assert.rejects(
+    runDelegate({ spec: "task", model: "gemini-4-neon-high", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) }),
+    (err) => {
+      assert.equal(err.reason, "unknown-model");
+      assert.match(err.message, /agy offers: gemini-4-neon, gemini-3\.8-flash, claude-sonnet-5-5/);
+      assert.match(err.message, /thinking level with effort/);
+      // The id is assigned at session/new, before the config calls that raise this.
+      assert.match(err.message, /Resume with resumeSessionId sess-models/);
+      return true;
+    }
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("runDelegate skips the model round-trip when the session already runs that model", async () => {
+  const calls = [];
+  const out = await runDelegate({ spec: "task", model: "gemini-4-neon", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) });
+  assert.deepEqual(calls.filter((c) => c[0] === "config"), []);
+  assert.equal(out.effectiveModel, undefined);
+  assert.deepEqual(out.effectiveEffort, { thought_level: "high" });
+});
+
+test("runDelegate switches model through the model config option", async () => {
+  const calls = [];
+  const out = await runDelegate({ spec: "task", model: "gemini-3.8-flash", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) });
+  assert.deepEqual(calls.filter((c) => c[0] === "config"), [["config", "model", "gemini-3.8-flash"]]);
+  assert.equal(out.effectiveModel, undefined, "silence means the request was honored");
+});
+
+test("runDelegate reports the session's model as effectiveModel when model is omitted", async () => {
+  const calls = [];
+  const out = await runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) });
+  assert.deepEqual(calls.filter((c) => c[0] === "config"), []);
+  assert.equal(out.effectiveModel, "gemini-4-neon");
+});
+
+test("runDelegate sends effort as thought_level and reports what agy echoes", async () => {
+  const calls = [];
+  const out = await runDelegate({ spec: "task", model: "gemini-3.8-flash", effort: "low", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) });
+  assert.deepEqual(calls.filter((c) => c[0] === "config"), [["config", "model", "gemini-3.8-flash"], ["config", "thought_level", "low"]]);
+  assert.deepEqual(out.effectiveEffort, { thought_level: "low" });
+});
+
+// Sonnet 5.5 on agy 1.5.13 offers no xhigh. The level is checked against the list the model
+// switch echoed, so the refusal comes from the bridge before agy or a prompt is involved.
+test("runDelegate rejects an effort the selected model does not offer, before prompting", async () => {
+  const calls = [];
+  await assert.rejects(
+    runDelegate({ spec: "task", model: "claude-sonnet-5-5", effort: "xhigh", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) }),
+    (err) => {
+      assert.equal(err.reason, "invalid-effort");
+      assert.match(err.message, /Accepted: \["low","medium","high"\]/);
+      return true;
+    }
+  );
+  assert.ok(!calls.some((c) => c[0] === "prompt"));
+  assert.ok(!calls.some((c) => c[1] === "thought_level"));
+});
+
+test("runDelegate sends no thinking level when effort is omitted", async () => {
+  const calls = [];
+  await runDelegate({ spec: "task", model: "gemini-3.8-flash", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) });
+  assert.ok(!calls.some((c) => c[1] === "thought_level"));
+});
+
+test("runDelegate skips model validation when the session reports no model option", async () => {
+  const out = await runDelegate({ spec: "task", model: "anything", workspace: process.cwd(), clientFactory: () => stubClient("sess-bare") });
+  assert.equal(out.sessionId, "sess-bare");
+});
+
+for (const [mode, agyMode] of [["agent", "default"], ["plan", "plan"], ["ask", "default"]]) {
+  test(`mode ${mode} sets agy mode ${agyMode}`, async () => {
+    const calls = [];
+    await runDelegate({ spec: "the task", mode, workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) });
+    assert.deepEqual(calls.find((c) => c[0] === "mode"), ["mode", agyMode]);
+    const prompt = calls.find((c) => c[0] === "prompt")[1];
+    if (mode === "ask") {
+      assert.match(prompt, /^Answer the question below\. Do not edit files/);
+      assert.ok(prompt.endsWith("\n\nthe task"));
+    } else {
+      assert.equal(prompt, "the task");
+    }
+  });
+}
+
+test("an unknown mode is refused before anything is spawned", async () => {
+  let made = 0;
+  await assert.rejects(
+    runDelegate({ spec: "task", mode: "review", workspace: process.cwd(), clientFactory: () => { made++; return stubClient(); } }),
+    (err) => { assert.equal(err.reason, "invalid-mode"); return true; }
+  );
+  assert.equal(made, 0);
+});
+
+// Resume against the fake agy: a known id reopens at agy's defaults (issue #1460), so the bridge
+// has to send the requested model, effort and mode again.
+test("runDelegate resumes a known session and re-applies model, effort and mode", async () => {
+  const sent = [];
+  const factory = () => {
+    const client = fakeFactory();
+    for (const name of ["setConfigOption", "setMode"]) {
+      const orig = client[name].bind(client);
+      client[name] = async (...args) => { sent.push([name, ...args.slice(1)]); return orig(...args); };
+    }
+    return client;
+  };
+  const out = await runDelegate({
+    spec: "continue", mode: "plan", resumeSessionId: "known-old", model: "gemini-3.8-flash", effort: "low",
+    workspace: process.cwd(), clientFactory: factory,
+  });
+  assert.equal(out.sessionId, "known-old");
+  assert.equal(out.resumed, true);
+  assert.deepEqual(sent, [
+    ["setConfigOption", "model", "gemini-3.8-flash"],
+    ["setConfigOption", "thought_level", "low"],
+    ["setMode", "plan"],
+  ]);
+  assert.deepEqual(out.effectiveEffort, { thought_level: "low" });
+});
+
+test("runDelegate starts fresh, with a warning, when agy has no such session", async () => {
+  const out = await runDelegate({ spec: "task", resumeSessionId: "gone", workspace: process.cwd(), clientFactory: fakeFactory });
+  assert.equal(out.sessionId, "sess-1");
+  assert.equal(out.resumed, undefined);
+  assert.ok(out.protocolWarnings.some((w) => w === "resuming gone failed, started a fresh session: agy has no session gone"));
+});
+
+// agy answers a missing id and a failed read with the same -32603, so the bridge checks the list:
+// a session agy still has is never silently replaced by a fresh one.
+for (const [label, listSessions] of [
+  ["agy still lists the session", async () => ({ sessions: [{ sessionId: "old-id" }] })],
+  ["the session list cannot be read", async () => { throw rpcError(-32603, "list failed"); }],
+]) {
+  test(`runDelegate fails rather than starting fresh when ${label}`, async () => {
+    let newSessions = 0;
+    const factory = () => {
+      const client = stubClient("sess-fresh");
+      client.newSession = async () => { newSessions++; return { sessionId: "sess-fresh" }; };
+      client.resumeSession = async () => { throw rpcError(-32603, "Failed to read session old-id; retry, or load it with session/load"); };
+      client.listSessions = listSessions;
+      return client;
+    };
+    await assert.rejects(
+      () => runDelegate({ spec: "task", resumeSessionId: "old-id", workspace: process.cwd(), clientFactory: factory }),
+      (err) => {
+        assert.equal(err.reason, "resume-failed");
+        assert.match(err.message, /Failed to read session old-id/);
+        return true;
+      }
+    );
+    assert.equal(newSessions, 0, "a failed resume must not silently spend a fresh session");
+  });
+}
+
+// Anything the session sends while it opens belongs to an earlier turn or to setup. Only frames
+// inside the prompt feed the result and the reported files.
+test("frames sent while the session opens stay out of the result and reported files", async () => {
+  const client = stubClient("known");
+  client.resumeSession = async () => {
+    client.emit("update", { update: { sessionUpdate: "user_message_chunk", content: { text: "earlier request" } } });
+    client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "old", title: "Edit", kind: "edit", status: "completed",
+      content: [{ type: "diff", path: "from-a-previous-turn.txt" }] } });
+    client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: "stale result text" } } });
+    return {};
+  };
+  client.prompt = async () => {
+    client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: "fresh answer" } } });
+    return { stopReason: "end_turn" };
+  };
+  const out = await runDelegate({ spec: "task", resumeSessionId: "known", workspace: process.cwd(), clientFactory: () => client });
+  assert.equal(out.result, "fresh answer");
+  assert.equal(out.filesReportedByEditTools, undefined);
+});
+
+// A tool_call frame that arrives already completed carries its diff on the tool_call itself.
+test("a diff on a completed tool_call frame is reported", async () => {
+  const client = stubClient("sess-done");
+  client.prompt = async () => {
+    client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "e1", kind: "edit", title: "File a.txt", status: "completed",
+      content: [{ type: "diff", path: path.join(process.cwd(), "a.txt") }] } });
+    client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: "done" } } });
+    return { stopReason: "end_turn" };
+  };
+  const out = await runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: () => client });
+  assert.deepEqual(out.filesReportedByEditTools, ["a.txt"]);
+});

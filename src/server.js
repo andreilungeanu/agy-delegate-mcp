@@ -1,0 +1,425 @@
+#!/usr/bin/env node
+import process from "node:process";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { runDelegate as runDelegateDefault } from "./delegate.js";
+import { runDoctor as runDoctorDefault } from "./doctor.js";
+import { VERSION, readPackageVersion } from "./version.js";
+import { DETACHED } from "./proc.js";
+
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+if (nodeMajor < 20) {
+  console.error(`agy-delegate-mcp requires Node 20+ (found ${process.versions.node})`);
+  process.exit(1);
+}
+
+// sessionId -> the set of delegations currently running on it. A set, not a single handle,
+// because a resume can race the turn it resumes: both are live, both are cancellable, and
+// keying one handle per id let whichever finished first deregister the other — after which
+// cancel reported a running session as already ended.
+const inFlight = new Map();
+function registerInFlight(map, sessionId, handle) {
+  const handles = map.get(sessionId);
+  if (handles) handles.add(handle);
+  else map.set(sessionId, new Set([handle]));
+}
+/** @returns {import("@modelcontextprotocol/sdk/types.js").CallToolResult} */
+function cancelResult(status, sessionId) {
+  return { content: [{ type: "text", text: JSON.stringify({ status, sessionId }) }] };
+}
+function unregisterInFlight(map, sessionId, handle) {
+  const handles = map.get(sessionId);
+  if (!handles) return;
+  handles.delete(handle);
+  if (handles.size === 0) map.delete(sessionId);
+}
+// Delegations whose session has not opened yet. inFlight is keyed by session id, and that id
+// arrives about 3.4s after the agent process does — so between client.start() and session/new
+// there is a live, auto-approved agent that the map cannot name. Shutdown walks this too.
+// cancel deliberately does not: an id the caller has never been given is not one it can pass.
+const pendingDelegations = new Set();
+
+// Session ids seen this process, kept after the turn ends so cancel can tell a finished
+// session (resumable, only the turn is over) from an id that never existed. Bounded so a
+// long-lived server does not grow without limit.
+const seenSessions = new Set();
+const SEEN_SESSIONS_CAP = 500;
+function rememberSession(set, id) {
+  if (id == null) return;
+  // Set iteration order makes the delete-then-add a small LRU: a session that is still being
+  // resumed moves back to the recent end, so it outlives an equally old id that was seen once
+  // and never again. Without it the id a caller is actually working with ages out on insertion
+  // order alone, and cancel then calls a live, resumable session one that never existed.
+  if (set.has(id)) set.delete(id);
+  set.add(id);
+  if (set.size > SEEN_SESSIONS_CAP) set.delete(set.values().next().value);
+}
+
+// Loaded at connect, before any tool schema is, so this carries only pre-call facts: what a
+// caller needs to decide whether to delegate at all. Call-time facts belong on the parameter
+// descriptions, read while the call is being written.
+export const SERVER_INSTRUCTIONS = `Delegate coding work to Antigravity (agy) through the delegate tool. Every permission the agent requests is auto-approved, in every mode: agent/plan/ask reach any file the user account can, and mode instructs the agent rather than limiting it. Scope workspace tightly and review the git diff after every run — filesReportedByEditTools carries only what the agent's edit tools reported; the diff is authoritative.`;
+
+// No outputSchema: that also requires structuredContent, and a host that reads both (Codex)
+// puts the payload in context twice. One JSON text block; the .strict() copy is in
+// delegate.test.js. Field meanings: skills/delegate/reference.md. cancel status lives on
+// its tool description.
+export const delegateOutputShape = {
+  result: z.string(),
+  resultSource: z.enum(["pre-tool-fallback", "none"]).optional(),
+  effectiveModel: z.string().optional(),
+  effectiveEffort: z.record(z.string(), z.string()).optional(),
+  stopReason: z.string().optional(),
+  sessionId: z.string(),
+  filesReportedByEditTools: z.array(z.string()).optional(),
+  resumed: z.boolean().optional(),
+  cancelRequested: z.boolean().optional(),
+  protocolWarnings: z.array(z.string()).optional(),
+  plan: z.object({
+    path: z.string(),
+    overview: z.string().optional(),
+    detail: z.string().optional(),
+  }).optional(),
+  artifacts: z.array(z.object({
+    path: z.string(),
+    summary: z.string().optional(),
+  })).optional(),
+};
+
+// Same in-repo contract as delegateOutputShape. Relayed agent fields stay unknown so a
+// weird protocolVersion is a diagnostic, not a failed call. doctor.test.js holds the
+// strict copy. Handshake is its own shape: a .strict() on agent does not look inside it.
+export const doctorHandshakeShape = {
+  ok: z.boolean(),
+  error: z.string().optional(),
+  protocolVersion: z.unknown().optional(),
+  agentCapabilities: z.unknown().optional(),
+  models: z.array(z.unknown()).optional(),
+  currentModel: z.unknown().optional(),
+  modes: z.array(z.unknown()).optional(),
+  tier: z.unknown().optional(),
+  // Built here rather than relayed, so it gets a real type where its neighbours get z.unknown().
+  currentModelOptions: z.array(z.object({
+    id: z.string(),
+    name: z.string().optional(),
+    category: z.string().optional(),
+    values: z.array(z.string()),
+    currentValue: z.string().optional(),
+  })).optional(),
+};
+
+export const doctorAgentShape = {
+  found: z.boolean(),
+  command: z.string(),
+  version: z.string().nullable(),
+  error: z.string().optional(),
+  handshake: z.object(doctorHandshakeShape).passthrough().optional(),
+};
+
+// agent is split out because a top-level .strict() does not look inside a nested object.
+export const doctorOutputShape = {
+  plugin: z.object({ version: z.string() }).passthrough(),
+  client: z.object({
+    name: z.string().nullable(),
+    version: z.string().nullable(),
+    capabilities: z.record(z.string(), z.unknown()),
+  }).passthrough(),
+  agent: z.object(doctorAgentShape).passthrough(),
+  runtime: z.object({
+    node: z.string(),
+    platform: z.string(),
+    arch: z.string(),
+    cwd: z.string(),
+    transport: z.literal("stdio"),
+  }),
+  env: z.record(z.string(), z.unknown()),
+};
+
+export const delegateInputSchema = z.object({
+  spec: z.string().trim().min(1, "spec must not be blank").describe("Task brief: goal, scope, fixed decisions quoted exactly, acceptance criteria. Sent as written. Point at files to read rather than pasting code, or attach them with contextFiles."),
+  mode: z.enum(["agent", "plan", "ask"]).default("agent").describe("agent implements; plan writes a plan, returned as plan; ask answers. plan and ask are instructions to the agent, not limits."),
+  resumeSessionId: z.string().optional().describe("Continue an existing agy session."),
+  workspace: z.string().trim().min(1, "workspace must not be blank").describe("The agent's working directory, not a limit. Smallest directory holding the task's files; with no such directory the project root is the floor. Must already exist; never create one for the call."),
+  model: z.string().trim().min(1, "model must be a non-empty string").optional().describe("agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, agy's default runs and effectiveModel names it. doctor deep:true lists every id."),
+  // Which values a model offers is only knowable after selecting it, so this stays an open
+  // string and the bridge validates the exact token against the live option list.
+  effort: z.string().trim().min(1).optional().describe("agy thinking level for the selected model (low, medium, high, xhigh). Levels differ per model; invalid values fail before the prompt and name the accepted set. Pass only when the user asks for agy effort — the host's own reasoning setting is unrelated."),
+  contextFiles: z.array(z.string()).optional().describe("Paths to attach instead of pasting contents into spec. Text becomes references the agent may open; images (png/jpg/gif/webp, <5MB) are sent inline. Relative paths resolve against workspace but are not limited to it. Skips are reported in protocolWarnings, never fatal."),
+});
+
+/**
+ * @param {{
+ *   args: any, extra?: any,
+ *   runDelegate: (opts: any) => Promise<any>,
+ *   inFlight: Map<string, Set<any>>,
+ *   pending?: Set<any>,
+ *   seenSessions?: Set<string>,
+ * }} deps
+ * @returns {Promise<import("@modelcontextprotocol/sdk/types.js").CallToolResult>}
+ */
+export async function runDelegateTool({ args, extra, runDelegate, inFlight, pending = new Set(), seenSessions = new Set() }) {
+  const { spec, mode, resumeSessionId, workspace, model, effort, contextFiles } = args;
+
+  const progressToken = extra?._meta?.progressToken;
+  /** @type {(message: string) => void} */
+  let onProgress = () => {};
+  if (progressToken != null) {
+    let progress = 0;
+    onProgress = (message) => {
+      // sendNotification is async: its rejection settles outside this try and would exit the
+      // server. The try stays for a sync throw, which lands before Promise.resolve can wrap it.
+      try {
+        Promise.resolve(extra.sendNotification({
+          method: "notifications/progress",
+          params: { progressToken, progress: ++progress, message },
+        })).catch(() => {});
+      } catch {}
+    };
+  }
+
+  let capturedSessionId;
+  let handle;
+  try {
+    const out = await runDelegate({
+      spec,
+      mode,
+      resumeSessionId,
+      workspace,
+      model,
+      effort,
+      contextFiles,
+      onProgress,
+      signal: extra?.signal,
+      onClientReady: (client) => {
+        handle = { client, cancelRequested: false };
+        pending.add(handle);
+      },
+      onSessionReady: (sessionId, client) => {
+        capturedSessionId = sessionId;
+        // The same handle moves across, so a shutdown racing this boundary finds it on exactly
+        // one side of it rather than on neither.
+        handle ??= { client, cancelRequested: false };
+        pending.delete(handle);
+        registerInFlight(inFlight, sessionId, handle);
+        rememberSession(seenSessions, sessionId);
+        // Emit the id the moment the session opens, before the turn finishes, so a host that
+        // can call tools concurrently has something to pass to cancel mid-run — otherwise the
+        // id only arrives when delegate returns, by which point there is nothing to cancel.
+        // (Hosts that serialize tool calls still cannot cancel in flight; that is a host limit.)
+        onProgress(`session ready: ${sessionId}`);
+      },
+    });
+    if (handle?.cancelRequested) out.cancelRequested = true;
+    return { content: [{ type: "text", text: JSON.stringify(out) }] };
+  } catch (err) {
+    return {
+      // The reason is already decided upstream; naming it here saves the caller parsing
+      // prose to tell a timeout from a rejected argument.
+      content: [{ type: "text", text: `delegate failed${err?.reason ? ` [${err.reason}]` : ""}: ` + (err?.message || String(err)) }],
+      isError: true,
+    };
+  } finally {
+    // Drops only this delegation's own handle; the id stays registered while another turn
+    // is still running on it. A delegation that failed before its session opened is only ever
+    // in pending, and one that opened is only ever in the map — the delete covers both.
+    if (handle) pending.delete(handle);
+    if (capturedSessionId) unregisterInFlight(inFlight, capturedSessionId, handle);
+  }
+}
+
+/**
+ * @param {{
+ *   runDelegate?: (opts: any) => Promise<any>,
+ *   runDoctor?: (opts: any) => Promise<any>,
+ *   forceGraceMs?: number,
+ * }} [opts]
+ */
+export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDoctorInjected, forceGraceMs = 5000 } = {}) {
+  const runDelegate = runDelegateInjected || runDelegateDefault;
+  const runDoctor = runDoctorInjected || runDoctorDefault;
+  const server = new McpServer(
+    { name: "agy-delegate-mcp", version: VERSION },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
+
+  server.registerTool(
+    "delegate",
+    {
+      description:
+        "Delegate a coding task to Antigravity's agy over ACP. Never shell out to agy — use this tool only. Auto-approves every permission the agent requests, in any mode and anywhere on disk. Clarifying questions arrive as prose in result — resume with resumeSessionId to answer. Leave model and effort unset unless the user explicitly asks. See the delegate skill.",
+      inputSchema: delegateInputSchema,
+      annotations: {
+        title: "Delegate coding task to Antigravity",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (args, extra) => runDelegateTool({ args, extra, runDelegate, inFlight, pending: pendingDelegations, seenSessions })
+  );
+
+  server.registerTool(
+    "cancel",
+    {
+      description:
+        "Best-effort cancel of an in-flight delegation by sessionId. session/cancel is advisory — the agent may finish the turn anyway, and the delegate result then carries cancelRequested. Status: cancelled, killed (agent process observed to exit), not-running (turn already ended, still resumable), not-found (id not in this process's recent session history).",
+      inputSchema: {
+        sessionId: z.string(),
+        force: z.boolean().default(false).describe("Kill the agent process if the turn is still running after a short grace period."),
+      },
+      annotations: {
+        title: "Cancel Antigravity delegation",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ sessionId, force }) => {
+      const handles = inFlight.get(sessionId);
+      if (!handles || handles.size === 0) {
+        // A finished session and a garbage id are both "not in flight". Reporting them alike
+        // would read as "bad id" for a session that ran and is still resumable.
+        const known = seenSessions.has(sessionId);
+        return cancelResult(known ? "not-running" : "not-found", sessionId);
+      }
+      // Cancel every turn running on the id: the caller named a session, not one of the
+      // turns that happen to share it.
+      for (const handle of handles) handle.cancelRequested = true;
+      await Promise.all([...handles].map((handle) => handle.client.cancel(sessionId).catch(() => {})));
+      if (!force) {
+        // The handles stay registered: session/cancel is best-effort, so the turn may still
+        // be running. Dropping them here made the natural escalation — cancel, wait, cancel
+        // with force — report not-found while the agent was alive. Each delegation's own
+        // finally removes its handle when the turn actually settles.
+        return cancelResult("cancelled", sessionId);
+      }
+      await new Promise((r) => setTimeout(r, forceGraceMs));
+      const stillRunning = inFlight.get(sessionId);
+      if (!stillRunning || stillRunning.size === 0) return cancelResult("cancelled", sessionId);
+      // Snapshot before awaiting stop. A resume that registers during teardown must not be
+      // swept out of the map — it was never killed, and inFlight.delete(sessionId) would
+      // hide it from cancel and shutdown.
+      const toKill = [...stillRunning];
+      const observed = await Promise.all(
+        toKill.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false))
+      );
+      // "killed" claims the process is gone, so it needs the exit, not just a dispatched signal.
+      // When one does not follow, the handles stay registered and force can be tried again.
+      if (!observed.every(Boolean)) return cancelResult("cancelled", sessionId);
+      for (const handle of toKill) unregisterInFlight(inFlight, sessionId, handle);
+      return cancelResult("killed", sessionId);
+    }
+  );
+
+  server.registerTool(
+    "doctor",
+    {
+      description:
+        "Setup diagnostics: plugin version, MCP client capabilities, agy launcher resolution. Run when delegation fails or agent.found is false.",
+      inputSchema: {
+        deep: z
+          .boolean()
+          .default(false)
+          .describe("Run an ACP handshake (start → initialize → newSession) to verify the agent is usable and signed in; adds models, modes, the current model's options and the account tier."),
+      },
+      annotations: {
+        title: "Diagnose Antigravity delegation setup",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ deep }) => {
+      const out = await runDoctor({
+        deep,
+        getClientInfo: () => ({
+          capabilities: server.server.getClientCapabilities(),
+          version: server.server.getClientVersion(),
+        }),
+      });
+      return { content: [{ type: "text", text: JSON.stringify(out) }] };
+    }
+  );
+
+  return server;
+}
+
+const __filename = fileURLToPath(import.meta.url);
+let isMain = false;
+if (process.argv[1]) {
+  try {
+    isMain = realpathSync(process.argv[1]) === realpathSync(__filename);
+  } catch {
+    // An imported module must not fail just because argv[1] is not a file.
+  }
+}
+
+// Kill what is still running, then exit, on any way the host has of going away.
+export function installSignalCleanup(map, {
+  pending = new Set(),
+  exit = (code) => process.exit(code),
+  setExitCode = (code) => { process.exitCode = code; },
+  schedule = (fn) => setImmediate(fn),
+  stdin = process.stdin,
+} = {}) {
+  let shuttingDown = false;
+  const shutdown = (code) => {
+    // A second trigger skips the wait below: the kills are already dispatched, and a caller
+    // that has asked twice wants out now.
+    if (shuttingDown) return exit(code);
+    shuttingDown = true;
+    // Set in the handler, not left to the exit below: a loop that runs dry on its own still
+    // has to die with the code the signal asked for, and the scheduled exit may never get a
+    // turn to run.
+    setExitCode(code);
+    const stops = [];
+    const dispatch = (handle) => {
+      try { stops.push(Promise.resolve(handle.client.stop()).catch(() => {})); } catch {}
+    };
+    for (const handles of map.values()) for (const handle of handles) dispatch(handle);
+    // Delegations still inside their handshake. The agent is already running for these, and this
+    // is the only place it is reachable from — they have no session id to be keyed under yet.
+    for (const handle of pending) dispatch(handle);
+    // On Windows the kill is a separate taskkill process: exiting before it walks the tree
+    // orphans everything below the shell wrapper — the ps1 launcher and the versioned agent
+    // were measured surviving the server's exit. stop() bounds itself (observed exit or its
+    // own deadline), so this wait is short and finite on every platform.
+    // Scheduled rather than called from the kill's own continuation, so the exit runs on a
+    // clean loop turn instead of on the settlement stack.
+    const leave = () => schedule(() => exit(code));
+    Promise.all(stops).then(leave, leave);
+  };
+  // Each agent runs in its own process group on POSIX, so a signal aimed at this process no
+  // longer reaches it. Installing a handler replaces Node's default; swallowing Ctrl-C would
+  // leak the agent. shutdown() already walks pending, so this covers spawn through session/new.
+  if (DETACHED) {
+    const signals = /** @type {[NodeJS.Signals, number][]} */ ([["SIGINT", 130], ["SIGTERM", 143]]);
+    for (const [signal, code] of signals) process.on(signal, () => shutdown(code));
+  }
+  // Closing the server's stdin is how a stdio host shuts the transport down, and it is what a
+  // host reaches for before it resorts to a signal. The SDK transport does not listen for it —
+  // it subscribes to `data` and `error` only — so EOF leaves this process up with a delegation
+  // still running and nobody left to hand it to.
+  stdin.on("end", () => shutdown(0));
+}
+
+if (isMain) {
+  // Without this the flag falls through to the transport, which owns stdout and waits on stdin —
+  // so confirming an install meant wiring the server into a host first. Reads the package.json
+  // beside this file, so it reports the code that is actually running rather than what a
+  // manifest pinned. stdout is free here because the transport never starts.
+  const argv = process.argv.slice(2);
+  if (argv.includes("--version") || argv.includes("-v")) {
+    console.log(readPackageVersion());
+  } else {
+    const server = buildServer();
+    installSignalCleanup(inFlight, { pending: pendingDelegations });
+    await server.connect(new StdioServerTransport());
+  }
+}
