@@ -69,6 +69,21 @@ test("client initializes, opens a session, prompts and emits updates", async () 
   client.stop();
 });
 
+// How the bridge launches agy on Windows: through cmd.exe, which always spawns. Without the PATH
+// check a missing launcher surfaced as agent-exit quoting cmd's localized "is not recognized"
+// line, and the reference's spawn-failed row (install agy) never fired. Measured live on 1.1.0.
+test("start() reports a missing launcher as spawn-failed when it runs through a shell", async () => {
+  const client = new AcpClient({
+    spawnSpec: { command: "definitely-not-a-real-command-xyz", args: ["acp"], options: { shell: true } },
+  });
+  await assert.rejects(() => client.start(), (err) => {
+    assert.equal(err.reason, "spawn-failed");
+    assert.match(err.message, /not found on PATH. Install the Antigravity CLI/);
+    return true;
+  });
+  await client.stop();
+});
+
 test("resumeSession reopens a known session and rejects an unknown one; listSessions lists ids", async () => {
   const client = new AcpClient({ spawnSpec: fakeSpawn() });
   await client.start();
