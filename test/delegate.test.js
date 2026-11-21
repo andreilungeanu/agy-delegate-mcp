@@ -1448,3 +1448,39 @@ test("a diff on a completed tool_call frame is reported", async () => {
   const out = await runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: () => client });
   assert.deepEqual(out.filesReportedByEditTools, ["a.txt"]);
 });
+
+// agy 1.5.14 moves a shell command that runs past about 12 s to the background and ends the turn:
+// the execute tool_call never reaches a terminal status, and agy's only message arrives while it
+// counts as running. Measured live (docs/captures/scenarios.jsonl, backgrounded-command): the
+// bridge returned result "" with a warning that agy sent no message at all.
+test("a turn that ends while a tool is still running returns agy's message about it", async () => {
+  const out = await replayResult([
+    { sessionUpdate: "tool_call", toolCallId: "t1", title: "ping -n 113 127.0.0.1", kind: "execute", status: "in_progress" },
+    msgChunk("Running `ping -n 113 127.0.0.1` in the background; waiting for it to finish."),
+  ]);
+  assert.equal(out.result, "Running `ping -n 113 127.0.0.1` in the background; waiting for it to finish.");
+  assert.equal(out.resultSource, "unfinished-tool");
+  assert.ok(out.protocolWarnings.some((w) => /still running \(ping -n 113 127\.0\.0\.1\)/.test(w)), JSON.stringify(out.protocolWarnings));
+  assert.ok(!out.protocolWarnings.some((w) => /without emitting any message/.test(w)));
+});
+
+test("a tool left running with no message still names the tool instead of reporting silence", async () => {
+  const out = await replayResult([
+    { sessionUpdate: "tool_call", toolCallId: "t1", title: "npm run build", kind: "execute", status: "in_progress" },
+  ]);
+  assert.equal(out.result, "");
+  assert.equal(out.resultSource, "none");
+  assert.ok(out.protocolWarnings.some((w) => /still running \(npm run build\)/.test(w)), JSON.stringify(out.protocolWarnings));
+});
+
+test("text sent while a tool ran is dropped once the tool finishes and a final message follows", async () => {
+  const out = await replayResult([
+    toolCall("t1", "in_progress"),
+    msgChunk("Still working."),
+    toolUpdate("t1", "completed"),
+    msgChunk("Done."),
+  ]);
+  assert.equal(out.result, "Done.");
+  assert.equal(out.resultSource, undefined);
+  assert.equal(out.protocolWarnings, undefined);
+});

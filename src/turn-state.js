@@ -52,6 +52,10 @@ function freshFields() {
     // caller "" with stopReason end_turn and no error. Kept so it can be handed back when
     // nothing survived — labelled, never blended with a real final message.
     discardedResult: "",
+    // Message text sent while a tool call was still running, since that call started. Not part of
+    // the result: it is handed back only when the turn ends with the call still unfinished, which
+    // is how agy reports moving a long shell command to the background.
+    unfinishedToolText: "",
     sawToolCall: false,
     collectingPostToolResult: false,
     activeToolCalls: new Set(),
@@ -100,6 +104,7 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
     },
 
     startTool(toolCallId, status) {
+      state.unfinishedToolText = "";
       state.sawToolCall = true;
       state.collectingPostToolResult = false;
       state.resetResult();

@@ -362,6 +362,7 @@ export async function runDelegate({
     if (up.sessionUpdate === "agent_message_chunk" && up.content?.text) {
       const text = up.content.text;
       if (state.collectingResult()) state.appendResult(text);
+      else if (state.activeToolCalls.size > 0) state.unfinishedToolText += text;
       state.messages.push(text);
     }
   });
@@ -421,7 +422,19 @@ export async function runDelegate({
       ? (state.sawToolCall ? "post-tool" : "tool-free-stream")
       : "none";
     const protocolWarnings = [];
-    if (!finalMessageAvailable && state.discardedResult) {
+    if (!finalMessageAvailable && state.activeToolCalls.size > 0) {
+      // agy moves a shell command that runs past about 12 s to the background and ends the turn
+      // with the call unfinished. The bridge stops agy when the delegation returns, and the
+      // command stops with it (measured with agy 1.5.14), so the caller has to hear about it.
+      result = state.unfinishedToolText;
+      resultSource = result ? "unfinished-tool" : "none";
+      protocolWarnings.push(
+        `the turn ended while a tool call was still running (${state.lastToolLabel ?? "unnamed tool"}).`
+        + " agy moves a shell command that runs past about 12 s to the background and ends the turn;"
+        + " that command stops when the bridge stops agy at the end of the delegation."
+        + (result ? " result is agy's message from while it ran." : " agy sent no message while it ran.")
+      );
+    } else if (!finalMessageAvailable && state.discardedResult) {
       result = state.discardedResult;
       resultSource = "pre-tool-fallback";
       protocolWarnings.push(

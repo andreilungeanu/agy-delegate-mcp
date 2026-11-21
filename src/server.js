@@ -76,7 +76,7 @@ export const SERVER_INSTRUCTIONS = `Delegate coding work to Antigravity (agy) th
 // its tool description.
 export const delegateOutputShape = {
   result: z.string(),
-  resultSource: z.enum(["pre-tool-fallback", "none"]).optional(),
+  resultSource: z.enum(["pre-tool-fallback", "unfinished-tool", "none"]).optional(),
   effectiveModel: z.string().optional(),
   effectiveEffort: z.record(z.string(), z.string()).optional(),
   stopReason: z.string().optional(),
