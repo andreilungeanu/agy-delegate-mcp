@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1880" height="660" viewBox="0 0 1880 660" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1880" height="760" viewBox="0 0 1880 760" role="img" aria-labelledby="title desc">
   <title id="title">A structured delegate result</title>
-  <desc id="desc">One JSON result contains the final answer, the resumable session id, files reported by the agent's own edit events, and the model agy ran. Explanatory comments and the visual wrapping of the result string are for readability.</desc>
+  <desc id="desc">A real agy delegate result: the final answer, the resumable session id, files reported by the agent's own edit events, the model agy ran and its thinking level. The result string wraps for readability, and agy's file:// links are shown as bare file names.</desc>
   <defs>
     <style>
       text { font-family: 'DejaVu Sans Mono', monospace; font-size: 28px; font-weight: 400; fill: #8B949E; }
@@ -10,27 +10,29 @@
       .comment { fill: #6E7681; font-style: italic; }
     </style>
   </defs>
-  <rect width="1880" height="660" fill="#0D1117"/>
+  <rect width="1880" height="760" fill="#0D1117"/>
 
   <circle cx="70" cy="68" r="11" fill="#FF5F56"/>
   <circle cx="110" cy="68" r="11" fill="#FFBD2E"/>
   <circle cx="150" cy="68" r="11" fill="#27C93F"/>
   <text x="196" y="77" class="header" xml:space="preserve"><tspan font-weight="700" fill="#C9D1D9">delegate</tspan><tspan> → one JSON result, not scraped terminal output</tspan></text>
 
-  <!-- The result string wraps visually; this is an annotated JSON example. -->
   <g xml:space="preserve">
     <text x="60" y="154">{</text>
-    <text x="94" y="204"><tspan class="key">"result"</tspan><tspan>: </tspan><tspan class="string">"All 4 tests pass. Each function takes only the path and</tspan></text>
-    <text x="279.44" y="254"><tspan class="string">returns a promise, matching what the tests expect."</tspan><tspan>,</tspan></text>
-    <text x="94" y="304"><tspan class="key">"sessionId"</tspan><tspan>: </tspan><tspan class="string">"65e12efa-cd1c-4d1c-9c8f-bb81702659e7"</tspan><tspan>,</tspan></text>
-    <text x="1020" y="304" class="comment">// resume this exact session</text>
-    <text x="94" y="354"><tspan class="key">"filesReportedByEditTools"</tspan><tspan>: [</tspan></text>
-    <text x="1020" y="354" class="comment">// from the agent's own edit events</text>
-    <text x="128" y="404"><tspan class="string">"src/store.js"</tspan><tspan>,</tspan></text>
-    <text x="128" y="454" class="string">"src/report.js"</text>
-    <text x="94" y="504">],</text>
-    <text x="94" y="554"><tspan class="key">"effectiveModel"</tspan><tspan>: </tspan><tspan class="string">"gemini-4-neon"</tspan></text>
-    <text x="1020" y="554" class="comment">// the model agy ran</text>
-    <text x="60" y="604">}</text>
+    <text x="94" y="204"><tspan class="key">"result"</tspan><tspan>: </tspan><tspan class="string">"Converted `loadStore` and `saveStore` in store.js to `async` functions using `node:fs/promises`, and</tspan></text>
+    <text x="248.00" y="254"><tspan class="string">updated `totalItems` and `itemNames` in report.js to `await loadStore(path)` and return promises. All</tspan></text>
+    <text x="248.00" y="304"><tspan class="string">4 tests in store.test.js now pass (`npm.cmd test`: 4 passed, 0 failed)."</tspan><tspan>,</tspan></text>
+    <text x="94" y="354"><tspan class="key">"sessionId"</tspan><tspan>: </tspan><tspan class="string">"eb5c882a-2e22-4513-aa6e-db6a573bb035"</tspan><tspan>,</tspan></text>
+    <text x="1020" y="354" class="comment">// resume this exact session</text>
+    <text x="94" y="404"><tspan class="key">"filesReportedByEditTools"</tspan><tspan>: [</tspan></text>
+    <text x="1020" y="404" class="comment">// from the agent's own edit events</text>
+    <text x="128" y="454"><tspan class="string">"src/store.js"</tspan><tspan>,</tspan></text>
+    <text x="128" y="504"><tspan class="string">"src/report.js"</tspan></text>
+    <text x="94" y="554">],</text>
+    <text x="94" y="604"><tspan class="key">"effectiveModel"</tspan><tspan>: </tspan><tspan class="string">"gemini-4-neon"</tspan><tspan>,</tspan></text>
+    <text x="1020" y="604" class="comment">// the model agy ran</text>
+    <text x="94" y="654"><tspan class="key">"effectiveEffort"</tspan><tspan>: { </tspan><tspan class="key">"thought_level"</tspan><tspan>: </tspan><tspan class="string">"high"</tspan><tspan> }</tspan></text>
+    <text x="1020" y="654" class="comment">// the thinking level in force</text>
+    <text x="60" y="704">}</text>
   </g>
 </svg>
