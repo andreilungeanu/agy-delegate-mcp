@@ -75,9 +75,9 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 // A resource_link hands the agent a path, not the file's bytes, so a large brief costs prompt
 // space only for what the agent opens. Images have no such form — they go inline. Both are
-// measured working, including links outside the workspace. Two rules from that probe:
-//   - gate images on the advertised capability: an agent can accept unsupported blocks without
-//     error (embeddedContext:false raises nothing), so an ungated image vanishes silently;
+// measured working on agy 1.5.13, including a link outside the workspace and both together.
+//   - gate images on the advertised capability: an agent that takes an unsupported block
+//     without error would drop the image silently;
 //   - report anything skipped — a dropped attachment is otherwise invisible.
 async function buildContextBlocks(contextFiles, workspace, client, warnings) {
   const blocks = [];
