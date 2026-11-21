@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "agy-delegate",
+  "displayName": "Antigravity Delegate",
+  "version": "0.1.0",
+  "description": "Delegate coding tasks to Antigravity's agy over ACP, with structured results, plan mode, and clarification handling.",
+  "author": {
+    "name": "Andrei Lungeanu",
+    "email": "andrei@lungeanu.ro"
+  },
+  "homepage": "https://github.com/andreilungeanu/agy-delegate-mcp",
+  "repository": "https://github.com/andreilungeanu/agy-delegate-mcp",
+  "license": "MIT",
+  "mcpServers": "./.claude-plugin/mcp.json",
+  "hooks": "./.claude-plugin/hooks.json",
+  "keywords": [
+    "mcp",
+    "antigravity",
+    "agy",
+    "gemini",
+    "acp",
+    "agent-client-protocol",
+    "claude-code",
+    "delegation"
+  ]
+}

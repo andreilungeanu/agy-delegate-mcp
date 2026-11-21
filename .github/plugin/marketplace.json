@@ -1,0 +1,19 @@
+{
+  "name": "agy-delegate-mcp",
+  "owner": {
+    "name": "Andrei Lungeanu",
+    "email": "andrei@lungeanu.ro"
+  },
+  "metadata": {
+    "description": "Plugins for delegating coding work to Antigravity through MCP.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "agy-delegate",
+      "description": "Delegate local coding work to Google Antigravity's CLI agent (agy) through MCP and ACP.",
+      "version": "0.1.0",
+      "source": "./"
+    }
+  ]
+}

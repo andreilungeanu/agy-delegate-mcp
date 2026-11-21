@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "agy-delegate-mcp",
+  "owner": {
+    "name": "Andrei Lungeanu",
+    "email": "andrei@lungeanu.ro"
+  },
+  "description": "Marketplace hosting the Antigravity Delegate plugin.",
+  "plugins": [
+    {
+      "name": "agy-delegate",
+      "source": "./",
+      "description": "MCP server bridging AI coding hosts to Antigravity's agy over ACP.",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "antigravity",
+        "agy",
+        "acp",
+        "claude-code",
+        "codex",
+        "copilot"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.andreilungeanu/agy-delegate-mcp",
+  "title": "Antigravity Delegate",
+  "description": "Bridge AI coding hosts to Google Antigravity's agy over the Agent Client Protocol.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/andreilungeanu/agy-delegate-mcp",
+  "repository": {
+    "url": "https://github.com/andreilungeanu/agy-delegate-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "agy-delegate-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "name": "agy-delegate",
+  "version": "0.1.0",
+  "description": "Delegate local coding work to Google Antigravity's CLI agent (agy) through MCP and ACP.",
+  "author": {
+    "name": "Andrei Lungeanu",
+    "email": "andrei@lungeanu.ro",
+    "url": "https://github.com/andreilungeanu"
+  },
+  "homepage": "https://github.com/andreilungeanu/agy-delegate-mcp",
+  "repository": "https://github.com/andreilungeanu/agy-delegate-mcp",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "antigravity",
+    "agy",
+    "codex",
+    "delegation",
+    "coding-agent"
+  ],
+  "skills": "./skills/",
+  "mcpServers": {
+    "agy-delegate": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "npm:agy-delegate-mcp@0.1.0"
+      ],
+      "tool_timeout_sec": 21660
+    }
+  },
+  "interface": {
+    "displayName": "Antigravity Delegate",
+    "shortDescription": "Delegate coding to Antigravity",
+    "longDescription": "Plan and orchestrate in ChatGPT or Codex, delegate local implementation to Google Antigravity's CLI agent, then review structured results and changed files.",
+    "developerName": "Andrei Lungeanu",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/andreilungeanu/agy-delegate-mcp",
+    "privacyPolicyURL": "https://github.com/andreilungeanu/agy-delegate-mcp/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/andreilungeanu/agy-delegate-mcp/blob/main/TERMS.md",
+    "defaultPrompt": [
+      "Delegate this implementation to Antigravity and review the diff.",
+      "Ask Antigravity to draft a plan for this change.",
+      "Ask Antigravity a question about this code, then review the git diff — every mode can edit files."
+    ]
+  }
+}

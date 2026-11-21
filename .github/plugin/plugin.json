@@ -1,0 +1,23 @@
+{
+  "name": "agy-delegate",
+  "version": "0.1.0",
+  "description": "Delegate local coding work to Google Antigravity's CLI agent (agy) through MCP and ACP.",
+  "author": {
+    "name": "Andrei Lungeanu",
+    "email": "andrei@lungeanu.ro",
+    "url": "https://github.com/andreilungeanu"
+  },
+  "homepage": "https://github.com/andreilungeanu/agy-delegate-mcp",
+  "repository": "https://github.com/andreilungeanu/agy-delegate-mcp",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "antigravity",
+    "agy",
+    "copilot",
+    "delegation",
+    "coding-agent"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.copilot.json"
+}

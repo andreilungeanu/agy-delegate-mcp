@@ -1,0 +1,9 @@
+{
+  "agy-delegate": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "npm:agy-delegate-mcp@0.1.0"
+    ]
+  }
+}
