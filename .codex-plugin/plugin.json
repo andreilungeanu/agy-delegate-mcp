@@ -46,6 +46,9 @@
       "Delegate this implementation to Antigravity and review the diff.",
       "Ask Antigravity to draft a plan for this change.",
       "Ask Antigravity a question about this code, then review the git diff — every mode can edit files."
-    ]
+    ],
+    "composerIcon": "./assets/logo-light.png",
+    "logo": "./assets/logo-light.png",
+    "logoDark": "./assets/logo-dark.png"
   }
 }

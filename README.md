@@ -4,7 +4,13 @@ Delegate edits to Google Antigravity's CLI agent (`agy`) — your agent writes t
 
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+<img src="assets/logo-light.png" alt="Antigravity Delegate logo" width="150" align="left" hspace="15">
+
 Antigravity Delegate is the MCP bridge that lets Claude Code, ChatGPT/Codex, Copilot — or any MCP client — hand implementation to **agy** over the Agent Client Protocol, then get a structured result back for review.
+
+<br clear="left">
+
+![You and your agent plan and review; the MCP delegate tool hands the brief to agy-delegate-mcp, which runs agy acp to implement and edit the workspace; a structured result comes back with the answer, edited files, plan, session id and model, for your agent to review](assets/flow.png)
 
 ## Features
 

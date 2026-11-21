@@ -10,6 +10,7 @@
   "homepage": "https://github.com/andreilungeanu/agy-delegate-mcp",
   "repository": "https://github.com/andreilungeanu/agy-delegate-mcp",
   "license": "MIT",
+  "logo": "assets/logo-light.png",
   "keywords": [
     "mcp",
     "antigravity",
