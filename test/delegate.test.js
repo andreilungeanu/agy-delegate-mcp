@@ -16,8 +16,10 @@ import { delegateOutputShape } from "../src/server.js";
 // Nothing else checks it: the shape is not declared to hosts, so a field added here but
 // forgotten there would drift undocumented and no other test would notice.
 const strictOutput = z.object(delegateOutputShape).strict();
+// Short background waits by default: a replayed turn that leaves a tool running would otherwise
+// wait out the real 10 min. Tests of the wait itself pass their own values.
 const runDelegate = async (opts) => {
-  const out = await rawRunDelegate(opts);
+  const out = await rawRunDelegate({ backgroundWaitMs: 300, backgroundSettleMs: 20, backgroundContinueMs: 300, ...opts });
   strictOutput.parse(out);
   return out;
 };
@@ -1531,4 +1533,90 @@ test("a signed-out agy fails as not-signed-in with the sign-in step", async () =
       return true;
     },
   );
+});
+
+// The continuation agy runs by itself once a backgrounded command finishes, as measured live
+// (agy 1.5.14, probe A): end_turn with the run_command unfinished, then tool_call_update completed,
+// the closing message and a usage_update — all after the prompt has already returned.
+function backgroundFactory({ completeAfterMs, continuation = ["Minimum = 0ms, Maximum = 0ms, Average = 0ms"] }) {
+  return () => {
+    const client = stubClient("sess-bg");
+    const emit = (update) => client.emit("update", { update });
+    client.prompt = async () => {
+      emit({ sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", title: "ping -n 25 127.0.0.1", kind: "execute", status: "in_progress" });
+      emit(msgChunk("The command has been launched and is running. I am waiting for it to finish."));
+      emit({ sessionUpdate: "usage_update" });
+      if (completeAfterMs !== undefined) {
+        setTimeout(() => {
+          emit({ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed" });
+          for (const text of continuation) emit(msgChunk(text));
+          emit({ sessionUpdate: "usage_update" });
+        }, completeAfterMs);
+      }
+      return { stopReason: "end_turn" };
+    };
+    return client;
+  };
+}
+
+test("a backgrounded command is waited for, and agy's continuation is the result", async () => {
+  const out = await runDelegate({
+    spec: "run it", mode: "agent", workspace: process.cwd(),
+    clientFactory: backgroundFactory({ completeAfterMs: 150 }),
+    backgroundWaitMs: 5000, backgroundSettleMs: 50, backgroundContinueMs: 2000,
+  });
+  assert.equal(out.result, "Minimum = 0ms, Maximum = 0ms, Average = 0ms");
+  assert.equal(out.resultSource, undefined);
+  assert.equal(out.protocolWarnings, undefined);
+});
+
+test("a backgrounded command that outlasts the wait comes back as unfinished-tool, naming the wait", async () => {
+  const started = Date.now();
+  const out = await runDelegate({
+    spec: "start the dev server", mode: "agent", workspace: process.cwd(),
+    clientFactory: backgroundFactory({}),
+    backgroundWaitMs: 200, backgroundSettleMs: 20, backgroundContinueMs: 2000,
+  });
+  assert.ok(Date.now() - started < 2000);
+  assert.equal(out.resultSource, "unfinished-tool");
+  assert.match(out.result, /launched and is running/);
+  assert.ok(out.protocolWarnings.some((w) => /still running after the bridge waited/.test(w) && /AGY_DELEGATE_BACKGROUND_WAIT_MS/.test(w)), JSON.stringify(out.protocolWarnings));
+});
+
+test("an open ask_question is returned at once, not waited for", async () => {
+  const started = Date.now();
+  const out = await runDelegate({
+    spec: "rename it", mode: "agent", workspace: process.cwd(),
+    clientFactory: replayFactory([
+      { sessionUpdate: "tool_call", toolCallId: "q1", name: "ask_question", title: "Run ask_question", status: "in_progress" },
+      msgChunk("Which variable?"),
+    ]),
+    backgroundWaitMs: 5000, backgroundSettleMs: 20, backgroundContinueMs: 5000,
+  });
+  assert.ok(Date.now() - started < 1000, "an ask_question must not hold the delegation");
+  assert.equal(out.result, "Which variable?");
+  assert.equal(out.resultSource, "unfinished-tool");
+});
+
+// Measured live: a plain cancel during the background wait made agy close the call without the
+// closing usage_update, and the bridge sat out its 60 s continuation limit before returning.
+test("a cancel during the background wait ends it at once and reports cancelled", async () => {
+  let clientRef;
+  const started = Date.now();
+  const out = await runDelegate({
+    spec: "run it", mode: "agent", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = backgroundFactory({})();
+      client.cancel = async () => {
+        client.cancelRequested = true;
+        client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "cancelled" } });
+      };
+      clientRef = client;
+      return client;
+    },
+    onSessionReady: () => { setTimeout(() => clientRef.cancel(), 150); },
+    backgroundWaitMs: 10000, backgroundSettleMs: 50, backgroundContinueMs: 10000,
+  });
+  assert.ok(Date.now() - started < 2000, `cancel took ${Date.now() - started} ms to end the wait`);
+  assert.equal(out.stopReason, "cancelled");
 });

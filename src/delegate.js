@@ -15,6 +15,7 @@ import { effortSettings, optionsFrom, resolveEffort, allowedValues } from "./mod
 import { transcriptFrames } from "./jsonrpc.js";
 
 export const DEFAULT_HANDSHAKE_MS = 60000;
+export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
 
 // The bridge's modes onto agy's. agy has no ask mode: ask runs in default with ASK_PREAMBLE
 // ahead of the spec. default asks before edits and commands, which the launch flag and the
@@ -242,6 +243,7 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   onSessionReady?: (sessionId: string, client: any) => void,
  *   onProgress?: (message: string) => void,
  *   progressThrottleMs?: number, heartbeatMs?: number, signal?: AbortSignal,
+ *   backgroundSettleMs?: number, backgroundContinueMs?: number, backgroundWaitMs?: number,
  * }} [opts]
  */
 export async function runDelegate({
@@ -251,6 +253,13 @@ export async function runDelegate({
   onClientReady, onSessionReady, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
+  // Quiet after agy's closing usage_update before its continuation counts as over, and how long
+  // to wait for a continuation that never starts once every background call has finished.
+  backgroundSettleMs = 2000,
+  backgroundContinueMs = 60000,
+  // A backgrounded command that never ends (a dev server) would otherwise hold the delegation to
+  // the hard cap.
+  backgroundWaitMs = envMs("AGY_DELEGATE_BACKGROUND_WAIT_MS", DEFAULT_BACKGROUND_WAIT_MS),
 } = {}) {
   // Nothing between here and the abort listener below may await: addEventListener does not
   // replay an abort that already fired, so an abort landing in that window would be lost.
@@ -328,6 +337,8 @@ export async function runDelegate({
   client.on("update", (u) => {
     if (!promptInFlight) return;
     const up = u?.update || {};
+    state.lastFrameAt = Date.now();
+    state.usageAfterActivity = up.sessionUpdate === "usage_update";
     // The agent titles the turn a beat after the prompt lands — useful live, when several
     // delegations run, and in timeout forensics. Kept out of the result.
     if (up.sessionUpdate === "session_info_update" && typeof up.title === "string" && up.title) {
@@ -342,7 +353,7 @@ export async function runDelegate({
       // artifact rather than as a workspace edit.
       const isArtifact = state.recordArtifact(up.rawInput ?? up.args);
       if (up.sessionUpdate === "tool_call") {
-        state.startTool(up.toolCallId, up.status);
+        state.startTool(up.toolCallId, up.status, up.name ?? up.title);
         const label = String(up.title || up.kind || "tool");
         const path = up.locations?.[0]?.path;
         // Collapsed onto one line the way both readers of this take it: a progress notification
@@ -366,6 +377,27 @@ export async function runDelegate({
       state.messages.push(text);
     }
   });
+
+  // agy moves a shell command to the background once it outlasts the call's WaitMsBeforeAsync and
+  // ends the turn; kept alive, it finishes the command, marks the call completed and continues the
+  // turn unprompted, closing with a usage_update (measured, agy 1.5.14). Stopping agy at end_turn
+  // killed the command, so wait for that continuation instead. The hard cap still bounds it.
+  let backgroundWaited;
+  const waitForBackground = async () => {
+    try { onProgress?.(`waiting for agy's background command: ${state.lastToolLabel ?? "tool"}`.slice(0, 200)); } catch {}
+    const startedAt = Date.now();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, Math.min(250, backgroundSettleMs)));
+      backgroundWaited = Date.now() - startedAt;
+      if (backgroundWaited >= backgroundWaitMs) return;
+      if (client.cancelRequested) return "cancelled";
+      if (state.backgroundToolCalls().length) continue;
+      const quietMs = Date.now() - state.lastFrameAt;
+      if (state.usageAfterActivity && quietMs >= backgroundSettleMs) return;
+      // Everything finished but agy never closed a continuation: stop waiting for one.
+      if (quietMs >= backgroundContinueMs) return;
+    }
+  };
 
   let sessionId;
   let resumeError;
@@ -407,7 +439,11 @@ export async function runDelegate({
       promptInFlight = true;
       try {
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
-        return await client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
+        const turn = await client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
+        if (state.backgroundToolCalls().length && await waitForBackground() === "cancelled") {
+          return { ...turn, stopReason: "cancelled" };
+        }
+        return turn;
       } finally {
         // The result is assembled across awaits below, so without this a frame trailing the
         // settled turn is still folded into it.
@@ -423,17 +459,18 @@ export async function runDelegate({
       : "none";
     const protocolWarnings = [];
     if (!finalMessageAvailable && state.activeToolCalls.size > 0) {
-      // agy ends a turn with a call unfinished in two measured cases (agy 1.5.14): it moves a
-      // shell command to the background once it outlasts the call's WaitMsBeforeAsync, a wait agy
-      // picks per command, or it waits on ask_question.
-      // The bridge stops agy when the delegation returns, so a backgrounded command stops with it.
+      // Two measured cases (agy 1.5.14): a backgrounded command still running when the wait for it
+      // ran out, or an ask_question, which waits on the caller. The bridge stops agy when the
+      // delegation returns, so a backgrounded command stops with it.
       result = state.unfinishedToolText;
       resultSource = result ? "unfinished-tool" : "none";
+      const cause = backgroundWaited !== undefined && state.backgroundToolCalls().length
+        ? ` agy moved it to the background, and it was still running after the bridge waited ${fmtDuration(backgroundWaited)}`
+          + " (AGY_DELEGATE_BACKGROUND_WAIT_MS); it stops when the bridge stops agy."
+        : " agy is asking a question (ask_question), which a resume answers.";
       protocolWarnings.push(
         `the turn ended with a tool call still running (${state.lastToolLabel ?? "unnamed tool"}).`
-        + " agy does this when it moves a shell command to the background after the wait it set for it (WaitMsBeforeAsync) —"
-        + " the command stops when the bridge stops agy — and when it asks a question (ask_question),"
-        + " which a resume answers."
+        + cause
         + (result ? " result is agy's message from while it ran." : " agy sent no message while it ran.")
       );
     } else if (!finalMessageAvailable && state.discardedResult) {

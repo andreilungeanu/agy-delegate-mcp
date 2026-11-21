@@ -59,6 +59,13 @@ function freshFields() {
     sawToolCall: false,
     collectingPostToolResult: false,
     activeToolCalls: new Set(),
+    // Tool name per call id (agy's `name`, else its title), so an unfinished ask_question, which
+    // waits on the caller, can be told from a backgrounded command, which finishes by itself.
+    toolNames: new Map(),
+    // Set by a usage_update and cleared by any other frame: agy closes a turn, prompted or not,
+    // with a usage_update after its last message.
+    usageAfterActivity: false,
+    lastFrameAt: 0,
     // Ids observed terminal, so a stale non-terminal re-send for one is recognized and dropped
     // instead of restarting collection — which would demote an already-collected final message
     // to discardedResult and mislabel it pre-tool-fallback.
@@ -103,7 +110,8 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
       state.resultChunks.push(text);
     },
 
-    startTool(toolCallId, status) {
+    startTool(toolCallId, status, name) {
+      if (toolCallId != null && name) state.toolNames.set(toolCallId, String(name));
       state.unfinishedToolText = "";
       state.sawToolCall = true;
       state.collectingPostToolResult = false;
@@ -140,6 +148,12 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
         state.resetResult();
         if (toolCallId != null) state.activeToolCalls.add(toolCallId);
       }
+    },
+
+    // Unfinished calls that end on their own: a backgrounded command or a scheduled wake-up. An
+    // ask_question waits on the caller instead, so it is never waited for.
+    backgroundToolCalls() {
+      return [...state.activeToolCalls].filter((id) => !/ask_question/.test(state.toolNames.get(id) ?? ""));
     },
 
     // True while a message chunk still belongs in the result: before any tool ran, or after

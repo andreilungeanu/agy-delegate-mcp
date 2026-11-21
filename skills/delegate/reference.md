@@ -32,7 +32,7 @@ retry with the returned `resumeSessionId`, the complete original `spec`, and a l
 | Field | Description |
 | ----- | ----------- |
 | `result` | Final agent text: the complete stream for tool-free turns, or only text emitted after the final tool completes. Empty when no final message was emitted. |
-| `resultSource` | Present only as a caveat on `result`; **absent on the happy path**, where `result` is simply the answer. `"pre-tool-fallback"` (no final message closed the turn; `result` is the last message before the agent's final tool call — read `protocolWarnings` before trusting it), `"unfinished-tool"` (the turn ended with a tool call still running: agy moved a shell command to the background after the wait it set for it (`WaitMsBeforeAsync`), and the command stopped with agy, or agy asked a question through `ask_question`, which a resume answers; `result` is agy's message from while it ran, and `protocolWarnings` names the tool) or `"none"` (no message; `result` is empty). A refusal is not a caveat here — it ends the turn cleanly and its text is the `result`; judge by the diff. |
+| `resultSource` | Present only as a caveat on `result`; **absent on the happy path**, where `result` is simply the answer. `"pre-tool-fallback"` (no final message closed the turn; `result` is the last message before the agent's final tool call — read `protocolWarnings` before trusting it), `"unfinished-tool"` (the turn ended with a tool call still running: a command agy moved to the background was still running when the background wait ran out, and it stopped with agy, or agy asked a question through `ask_question`, which a resume answers; `result` is agy's message from while it ran, and `protocolWarnings` names the tool) or `"none"` (no message; `result` is empty). A refusal is not a caveat here — it ends the turn cleanly and its text is the `result`; judge by the diff. |
 | `stopReason` | Present only when it is not the ordinary `end_turn` — a refusal, a cancel, or an output cap. Absence means the turn ended normally. |
 | `sessionId` | Session id for resume. |
 | `effectiveModel` | The base model id agy ran, present when it differs from `model` and always when `model` was omitted. |
@@ -130,9 +130,10 @@ acting on it.
 | Handshake deadline | 60 s | Spawn through session setup only, where silence really does mean a wedged agent. |
 | Hard cap | 6 h | Whole delegation, absolute. |
 | Mid-turn idle guard | off | Opt-in; silence during a turn does not settle the session. |
+| Background wait | 10 min | agy moves a shell command that outlasts the wait it set for it (`WaitMsBeforeAsync`) to the background and ends the turn. The bridge keeps agy running until the command finishes and agy reports on it, then returns that report. |
 
-Overrides: `AGY_DELEGATE_HANDSHAKE_MS`, `AGY_DELEGATE_HARD_CAP_MS`, `AGY_DELEGATE_IDLE_MS`
-(unset or `0` = disabled). On the other two, a non-positive or malformed value falls back to the
+Overrides: `AGY_DELEGATE_HANDSHAKE_MS`, `AGY_DELEGATE_HARD_CAP_MS`, `AGY_DELEGATE_BACKGROUND_WAIT_MS`,
+`AGY_DELEGATE_IDLE_MS` (unset or `0` = disabled). On the other three, a non-positive or malformed value falls back to the
 default. Agent process exit is detected directly and fails fast regardless of these.
 
 A delegation is still cancellable at any time via the `cancel` tool or a host interrupt.

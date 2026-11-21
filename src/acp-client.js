@@ -150,7 +150,9 @@ export class AcpClient extends EventEmitter {
   setConfigOption(sessionId, configId, value) { return this.peer.request("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
   setMode(sessionId, modeId) { return this.peer.request("session/set_mode", { sessionId, modeId }); }
   prompt(sessionId, blocks) { return this.peer.request("session/prompt", { sessionId, prompt: blocks }); }
-  cancel(sessionId) { this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }
+  // Recorded so a delegation waiting on a backgrounded command can stop waiting: after a cancel
+  // agy closes the call without the usage_update that ends a continuation.
+  cancel(sessionId) { this.cancelRequested = true; this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 

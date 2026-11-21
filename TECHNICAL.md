@@ -98,6 +98,7 @@ diagnostic, not fail the call.
 | `AGY_DELEGATE_HANDSHAKE_MS` | Handshake deadline (default 60 s). |
 | `AGY_DELEGATE_HARD_CAP_MS` | Absolute delegation cap (default 6 h). |
 | `AGY_DELEGATE_IDLE_MS` | Opt-in mid-turn idle guard; unset or `0` = off. |
+| `AGY_DELEGATE_BACKGROUND_WAIT_MS` | How long to wait for a command agy moved to the background (default 10 min). |
 | `ACP_E2E` | Set to `1` to run the live e2e tests locally; they spend agy quota. |
 
 ## Source layout
