@@ -1,0 +1,134 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Space-separated tags to release (empty = every tag missing a release)"
+        required: false
+        default: ""
+
+jobs:
+  # The full test workflow — every matrix leg, typecheck, the coverage floor, audit and min-deps.
+  # A tag push ships only what this passes. Skipped for the dispatch backfill, which fills in
+  # release pages for versions already on npm and must not be blocked by a runner that has moved
+  # on since they shipped.
+  verify:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/test.yml
+
+  release:
+    needs: verify
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Create GitHub releases with notes from CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tags="$GITHUB_REF_NAME"
+          else
+            tags="${{ inputs.tags }}"
+            [ -n "$tags" ] || tags=$(git tag -l 'v*' | sort -V)
+          fi
+          newest=$(git tag -l 'v*' | sort -V | tail -1)
+          for tag in $tags; do
+            if gh release view "$tag" --json tagName >/dev/null 2>&1; then
+              echo "$tag: release already exists, skipping"
+              continue
+            fi
+            version="${tag#v}"
+            awk -v ver="$version" '
+              index($0, "## [" ver "]") == 1 { found = 1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md > notes.md
+            if ! grep -q '[^[:space:]]' notes.md; then
+              echo "See [CHANGELOG.md](CHANGELOG.md)." > notes.md
+            fi
+            latest="--latest=false"
+            [ "$tag" = "$newest" ] && latest="--latest"
+            gh release create "$tag" --verify-tag --title "$tag" --notes-file notes.md "$latest"
+            echo "$tag: release created"
+          done
+
+  # Trusted publishing (OIDC): no NPM_TOKEN, provenance is attested automatically.
+  # npmjs.com registers this by filename, so renaming release.yml breaks publishing.
+  # Only tag pushes publish; the workflow_dispatch backfill exists to fill in
+  # missing GitHub releases and must never republish an already-shipped version.
+  publish:
+    needs: verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Trusted publishing needs npm >= 11.5.1
+        run: npm install -g npm@latest
+      - name: Tag must match the version being published
+        run: |
+          version=$(npm pkg get version | tr -d '"')
+          [ "v$version" = "$GITHUB_REF_NAME" ] || {
+            echo "tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          }
+      - run: npm ci
+      - run: npm test
+      - run: npm publish
+
+  # The registry verifies ownership by fetching the published npm package and matching
+  # its mcpName against server.json, so this can only run once publish has succeeded.
+  registry:
+    needs: publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install mcp-publisher
+        run: |
+          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/').tar.gz" \
+            | tar xz mcp-publisher
+          sudo mv mcp-publisher /usr/local/bin/
+      # npm accepts a publish a minute or two before it serves the new version, and the
+      # registry validates against npm, so publishing straight after rejects the version as
+      # not found. Retry that error until npm catches up, and retry registry 5xx responses;
+      # anything else fails at once.
+      - name: Publish to the MCP Registry
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            mcp-publisher login github-oidc
+            if out=$(mcp-publisher publish 2>&1); then
+              echo "$out"
+              exit 0
+            fi
+            echo "$out"
+            if ! grep -qE "was not found|status 5[0-9][0-9]" <<<"$out"; then
+              exit 1
+            fi
+            if [ "$attempt" -lt 10 ]; then
+              echo "::warning::MCP Registry publish not accepted yet (attempt $attempt/10); retrying in 30s."
+              sleep 30
+            fi
+          done
+          echo "::error::MCP Registry publish failed after 10 attempts."
+          exit 1

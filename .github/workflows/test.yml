@@ -1,0 +1,88 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # release.yml calls this before publishing. Running `npm test` there covered one leg on one
+  # runner, which is why 1.22.0 shipped while the coverage floor was red — that gate lives in
+  # `checks`, which a tag push never reached.
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [20]
+        include:
+          - os: ubuntu-latest
+            node-version: 22
+          - os: ubuntu-latest
+            node-version: 24
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm pack --dry-run
+      - run: npm run test:pack
+
+  # Platform-independent gates, so once is enough rather than once per matrix leg.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # Functions sits below lines and branches because V8 counts things this codebase writes on
+      # purpose and cannot drive: the `.catch(() => {})` arms that keep a fire-and-forget rejection
+      # off the process, default factories every test injects over, and the win32 kill path that
+      # cannot run on this runner. Covering those means tests that assert nothing, so the floor
+      # matches what is honestly reachable. Raise it when the ratio earns it, not by writing them.
+      - name: Coverage floor
+        run: >
+          node scripts/run-tests.mjs --experimental-test-coverage --test-coverage-include='src/**'
+          --test-coverage-lines=95 --test-coverage-branches=85 --test-coverage-functions=88
+      - name: Audit production dependencies
+        timeout-minutes: 5
+        env:
+          # Bound each request; retry the whole audit if the registry is unavailable.
+          NPM_CONFIG_FETCH_RETRIES: 0
+          NPM_CONFIG_FETCH_TIMEOUT: 30000
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npm audit --omit=dev --audit-level=high; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::npm audit failed (attempt $attempt/3); retrying."
+              sleep "$((attempt * 10))"
+            fi
+          done
+          echo "::error::npm audit failed after 3 attempts; a passing audit is required."
+          exit 1
+
+  # The lockfile resolves a newer SDK; make sure the declared minimum keeps working.
+  min-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save @modelcontextprotocol/sdk@1.23.0
+      - run: npm test
