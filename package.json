@@ -1,0 +1,63 @@
+{
+  "name": "agy-delegate-mcp",
+  "version": "0.1.0",
+  "mcpName": "io.github.andreilungeanu/agy-delegate-mcp",
+  "type": "module",
+  "description": "Delegate multi-file coding work from Claude Code, Codex, Copilot, or any MCP client to Google's Antigravity CLI (agy) — structured results, plan mode, and changed files.",
+  "license": "MIT",
+  "author": "Andrei Lungeanu <andrei@lungeanu.ro>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andreilungeanu/agy-delegate-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/andreilungeanu/agy-delegate-mcp/issues"
+  },
+  "homepage": "https://github.com/andreilungeanu/agy-delegate-mcp#readme",
+  "keywords": [
+    "mcp",
+    "antigravity",
+    "antigravity-cli",
+    "agy",
+    "gemini",
+    "acp",
+    "agent-client-protocol",
+    "claude-code",
+    "codex",
+    "github-copilot",
+    "vscode",
+    "delegation",
+    "coding-agent",
+    "ai-agents"
+  ],
+  "main": "src/server.js",
+  "bin": {
+    "agy-delegate-mcp": "src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "TERMS.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node scripts/run-tests.mjs",
+    "test:pack": "node test/npm-package-smoke.mjs",
+    "start": "node src/server.js",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.23.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
+  }
+}

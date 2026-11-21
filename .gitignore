@@ -1,0 +1,28 @@
+# Dependencies (installed on first SessionStart for the bundled Claude Code plugin)
+node_modules/
+
+# Local / runtime config
+acp.config.json
+.env
+.env.*
+.claude/
+.codex/
+.cursor/
+/docs/
+spike/
+.firecrawl/
+
+# Bench artifacts
+bench/
+
+# Logs and debug output
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
