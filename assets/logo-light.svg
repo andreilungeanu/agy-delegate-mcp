@@ -1,10 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">Antigravity Delegate — light</title>
-  <desc id="desc">A coral task tile rises above an open orbital arrow: lift, hand-off, and return.</desc>
-  <!-- Original vector artwork. Family conventions: cream tile, charcoal strokes, coral accent. -->
+  <desc id="desc">An original geometric A with a floating coral arrow as its crossbar. An opening in the right leg lets the arrow hand work onward.</desc>
+  <!-- Original letterform drawn from geometric strokes, with a detached hand-off crossbar. -->
   <rect width="1024" height="1024" rx="224" fill="#F4EFE4"/>
-  <path d="M360 502C247 522 184 581 190 648C200 752 392 804 574 758C736 717 841 615 810 486" fill="none" stroke="#41434C" stroke-width="44" stroke-linecap="round"/>
-  <path d="M728 544L810 470L852 574" fill="none" stroke="#41434C" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M478 538V606M546 520V568" fill="none" stroke="#FF6B6B" stroke-width="30" stroke-linecap="round"/>
-  <rect x="384" y="172" width="256" height="256" rx="42" transform="rotate(45 512 300)" fill="#FF6B6B"/>
+  <path d="M244 792L479 252Q512 180 545 252L622 430M728 672L780 792" fill="none" stroke="#41434C" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M430 584H730M662 516L730 584L662 652" fill="none" stroke="#FF6B6B" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
