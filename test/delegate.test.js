@@ -1508,3 +1508,27 @@ test("runDelegate starts the agent in the workspace, not the server's directory"
   });
   assert.equal(seen[0]?.cwd, workspace);
 });
+
+// A signed-out agy answers session/new with ACP's auth error, captured live on a fresh WSL install:
+// {"code":-32000,"message":"Authentication required"}. It read as a generic agent-error with no
+// way forward.
+test("a signed-out agy fails as not-signed-in with the sign-in step", async () => {
+  await assert.rejects(
+    () => runDelegate({
+      spec: "say hi", mode: "agent", workspace: process.cwd(),
+      clientFactory: () => {
+        const client = stubClient();
+        client.newSession = async () => {
+          throw Object.assign(new Error("Authentication required"), { code: -32000 });
+        };
+        return client;
+      },
+    }),
+    (err) => {
+      assert.equal(err.reason, "not-signed-in");
+      assert.match(err.message, /Authentication required/);
+      assert.match(err.message, /run agy once in a terminal and sign in/);
+      return true;
+    },
+  );
+});

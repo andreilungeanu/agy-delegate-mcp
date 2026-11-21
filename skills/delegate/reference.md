@@ -87,6 +87,7 @@ Errors come back as `delegate failed [<reason>]: …`.
 | `hard-cap` | The 6h absolute cap elapsed. | Resume the id in the message. |
 | `idle-timeout` | Opt-in mid-turn idle guard tripped (off by default). | Resume the id in the message. |
 | `spawn-failed` | The agent process could not be started at all (launcher missing or not executable). | Install the Antigravity CLI and sign in by running `agy` once; `doctor` shows the launcher resolution. |
+| `not-signed-in` | agy has no stored sign-in and rejected the session (ACP `-32000`, "Authentication required"). Nothing was prompted. | Ask the user to run `agy` once in a terminal and sign in, then retry. |
 | `agent-exit` | The agent process died; stderr is included. | Resume once; run `doctor` if it repeats. |
 | `handshake-timeout` | No prompt ever went in flight — the agent wedged during setup. Setup runs past `session/new`, so a session may already exist. | Resume the id if the message names one; run `doctor` if it names none, or if resuming repeats the stall. |
 | `aborted` | The MCP host interrupted the request (e.g. Esc in Claude Code). Usually fires mid-turn against a live session, so a `resumeSessionId` is supplied; only an abort that arrives before the session exists has none. | Deliberate, so normally stop — but resume the id if the work should continue. |
