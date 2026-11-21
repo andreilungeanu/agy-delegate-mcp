@@ -5,7 +5,7 @@
   "description": "Bridge AI coding hosts to Google Antigravity's agy over the Agent Client Protocol.",
   "icons": [
     {
-      "src": "https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v1.0.0/assets/logo-light.png",
+      "src": "https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v1.1.0/assets/logo-light.png",
       "mimeType": "image/png",
       "sizes": [
         "1024x1024"
@@ -13,7 +13,7 @@
       "theme": "light"
     },
     {
-      "src": "https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v1.0.0/assets/logo-dark.png",
+      "src": "https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v1.1.0/assets/logo-dark.png",
       "mimeType": "image/png",
       "sizes": [
         "1024x1024"
@@ -21,7 +21,7 @@
       "theme": "dark"
     }
   ],
-  "version": "1.0.0",
+  "version": "1.1.0",
   "websiteUrl": "https://github.com/andreilungeanu/agy-delegate-mcp",
   "repository": {
     "url": "https://github.com/andreilungeanu/agy-delegate-mcp",
@@ -31,7 +31,7 @@
     {
       "registryType": "npm",
       "identifier": "agy-delegate-mcp",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "transport": {
         "type": "stdio"
       }

@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-22
+
+### Changed
+
+- The README lists install steps for Cursor (one-click deeplink), VS Code (one-click install),
+  JetBrains AI Assistant, Devin Desktop, Visual Studio, OpenCode, Kilo Code and Kiro, and shows
+  npm, MCP Registry, Glama, Node and test badges.
+
 ## [1.0.0] - 2026-11-21
 
 First public release.
