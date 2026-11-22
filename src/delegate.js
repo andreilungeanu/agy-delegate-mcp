@@ -471,8 +471,11 @@ export async function runDelegate({
       if (client.cancelRequested) return cancelledInSetup;
       servedModel = configOptionValue(options, "model") ?? modelBeforeEffort;
       // Saved once agy accepted them, with the model agy reports, so an effort set on agy's default
-      // is tied to that model.
-      if (targetModel !== undefined || targetEffort !== undefined) rememberSettings(sessionId, { model: targetModel ?? servedModel, effort: targetEffort });
+      // is tied to that model. A session run on agy's defaults is recorded too, as having none, so
+      // its resume here does not read as a restart.
+      rememberSettings(sessionId, targetModel !== undefined || targetEffort !== undefined
+        ? { model: targetModel ?? servedModel, effort: targetEffort }
+        : {});
       // What agy reported in force, never the requested value.
       effectiveEffort = effortSettings(options);
       await client.setMode(sessionId, agyMode);

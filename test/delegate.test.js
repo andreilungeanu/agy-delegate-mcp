@@ -2265,3 +2265,17 @@ test("an effort reply without the model entry still ties the remembered effort t
   await runDelegate({ spec: "x", workspace: process.cwd(), resumeSessionId: "sess-partial", clientFactory: factory, model: "m-a" });
   assert.deepEqual(sent, [["thought_level", "low"]], "the effort set on m-a must be re-sent");
 });
+
+// Only a call that set model or effort was recorded, so resuming a session this process ran on
+// agy's defaults warned that the server keeps no record across restarts.
+test("a same-process resume of a session run on agy's defaults gives no restart warning", async () => {
+  const factory = () => {
+    const client = stubClient("sess-defaults");
+    client.prompt = async () => { client.emit("update", { update: msgChunk("ok") }); return { stopReason: "end_turn" }; };
+    return client;
+  };
+  await runDelegate({ spec: "x", workspace: process.cwd(), clientFactory: factory });
+  const out = await runDelegate({ spec: "x", workspace: process.cwd(), resumeSessionId: "sess-defaults", clientFactory: factory });
+  assert.equal(out.resumed, true);
+  assert.ok(!(out.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)), JSON.stringify(out.protocolWarnings));
+});
