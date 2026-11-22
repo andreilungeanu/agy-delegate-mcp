@@ -16,6 +16,18 @@ import { transcriptFrames } from "./jsonrpc.js";
 
 export const DEFAULT_HANDSHAKE_MS = 60000;
 
+// The model and effort callers set on each session this process ran. agy reopens a resumed session
+// at its defaults (agy #1460, measured on 1.5.14) and every delegation is a new agy process, so a
+// resume that left model out ran agy's default model. Process-local: a restarted server starts
+// empty. Bounded as seenSessions is in server.js, refreshed on use.
+const sessionSettings = new Map();
+const SESSION_SETTINGS_CAP = 500;
+function rememberSettings(id, settings) {
+  sessionSettings.delete(id);
+  sessionSettings.set(id, settings);
+  if (sessionSettings.size > SESSION_SETTINGS_CAP) sessionSettings.delete(sessionSettings.keys().next().value);
+}
+
 export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
 
 // The bridge's modes onto agy's. agy has no ask mode: ask runs in default with ASK_PREAMBLE
@@ -455,16 +467,23 @@ export async function runDelegate({
       // reproduced on 1.5.13), so model, effort and mode are compared and re-sent every time
       // rather than assumed to have carried over.
       let options = client.configOptions;
-      if (model !== undefined) {
-        assertKnownModel(options, model);
-        if (configOptionValue(options, "model") !== model) {
-          options = optionsFrom(await client.setConfigOption(sessionId, "model", model));
+      // Only a resume that took inherits: a fallback to a fresh session is a different session.
+      const earlier = resumeSessionId && sessionId === resumeSessionId ? sessionSettings.get(sessionId) : undefined;
+      const targetModel = model ?? earlier?.model;
+      // A remembered effort holds only on the model it was set for: another model may not offer it.
+      const targetEffort = effort ?? (targetModel === earlier?.model ? earlier?.effort : undefined);
+      if (targetModel !== undefined) {
+        assertKnownModel(options, targetModel);
+        if (configOptionValue(options, "model") !== targetModel) {
+          options = optionsFrom(await client.setConfigOption(sessionId, "model", targetModel));
         }
       }
-      if (effort !== undefined) {
-        const target = model ?? configOptionValue(options, "model") ?? "the session's model";
-        options = optionsFrom(await applyEffort(client, sessionId, target, effort, options));
+      if (targetEffort !== undefined) {
+        const target = targetModel ?? configOptionValue(options, "model") ?? "the session's model";
+        options = optionsFrom(await applyEffort(client, sessionId, target, targetEffort, options));
       }
+      // Saved once agy has accepted them, so a rejected model or effort is not carried forward.
+      if (targetModel !== undefined || targetEffort !== undefined) rememberSettings(sessionId, { model: targetModel, effort: targetEffort });
       servedModel = configOptionValue(options, "model");
       // What the agent reported in force as the prompt goes out — never the requested value
       // standing in for a reply that did not confirm it.

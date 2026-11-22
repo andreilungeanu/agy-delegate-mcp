@@ -2054,3 +2054,19 @@ test("an agent that does not exit after the stop is retried and reported", async
   assert.equal(stops, 2, "the stop must be retried once as a kill");
   assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
 });
+
+// agy reopens a resumed session at its defaults (agy #1460, measured on 1.5.14), and every
+// delegation is a new agy process, so a resume that left model out quietly ran agy's default.
+test("a resume keeps the model and effort set earlier in the session unless the caller changes them", async () => {
+  const run = (args) => runDelegate({ spec: "do the thing", workspace: process.cwd(), resumeSessionId: "known-old", clientFactory: fakeFactory, ...args });
+  await run({ model: "gemini-4-neon", effort: "xhigh" });
+  const carried = await run({});
+  assert.equal(carried.resumed, true);
+  assert.equal(carried.effectiveModel, "gemini-4-neon");
+  assert.deepEqual(carried.effectiveEffort, { thought_level: "xhigh" }, "the effort set earlier must hold");
+  // claude-sonnet-5-5 offers no xhigh: a remembered effort is not forced onto a new model.
+  const switched = await run({ model: "claude-sonnet-5-5" });
+  assert.deepEqual(switched.effectiveEffort, { thought_level: "high" });
+  const afterSwitch = await run({});
+  assert.equal(afterSwitch.effectiveModel, "claude-sonnet-5-5");
+});
