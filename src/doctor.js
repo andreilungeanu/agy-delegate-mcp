@@ -40,12 +40,13 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
   const isJsScript = isJsLauncher(launcher);
   const execCommand = isJsScript ? process.execPath : command;
   const execArgs = isJsScript ? [launcher, "--version"] : ["--version"];
-  // Through a shell, a missing launcher still spawns (the shell does) and would read as found.
-  if (options?.shell && !isJsScript && !commandExists(launcher)) return Promise.resolve({ found: false, version: null });
+  // Found before the spawn: through cmd.exe a missing launcher still spawns and would read as found.
+  const launch = spawnArgv(execCommand, execArgs, options);
+  if (!launch) return Promise.resolve({ found: false, version: null });
   const aborted = { version: null, error: "version probe aborted by MCP host" };
   // Interrupted already: nothing is spawned, and found comes from the lookup alone.
   if (signal?.aborted) {
-    return Promise.resolve({ found: isJsScript ? existsSync(launcher) : commandExists(launcher), ...aborted });
+    return Promise.resolve({ found: isJsScript ? existsSync(launcher) : commandExists(launcher, options?.env), ...aborted });
   }
   return new Promise((resolve) => {
     let settled = false;
@@ -60,7 +61,6 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       if (onAbort) signal?.removeEventListener("abort", onAbort);
       resolve(result);
     };
-    const launch = spawnArgv(execCommand, execArgs, options);
     const [file, argv] = spawnCommandLine(launch.command, launch.args, launch.options);
     const child = spawn(file, argv, { ...launch.options, detached: DETACHED, stdio: ["ignore", "pipe", "pipe"] });
     // Capped: a version is one line.
@@ -82,7 +82,7 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       });
     });
     timer = setTimeout(() => {
-      // treeKill: on win32 a plain kill reaches only the shell wrapper.
+      // treeKill: on win32 a plain kill reaches only the launcher, not what a .cmd or .ps1 started.
       if (child.pid) treeKill(child.pid).catch(() => {});
       // It spawned, so it is installed; it did not answer.
       finish({ found: true, version: null, error: `version probe timed out after ${timeoutMs}ms` });

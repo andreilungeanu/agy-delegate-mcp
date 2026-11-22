@@ -35,7 +35,8 @@ function descendantPids(pid) {
   }));
 }
 
-// On win32 a plain kill reaches only the shell wrapper; taskkill /T takes the tree.
+// On win32 a plain kill reaches only the launched process (agy.exe, or the cmd.exe or PowerShell
+// running a script); taskkill /T takes the tree, agy's commands included.
 export async function treeKill(pid, { childAlive = true } = {}) {
   if (!pid) return;
   if (process.platform === "win32") {

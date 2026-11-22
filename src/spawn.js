@@ -1,5 +1,5 @@
 import process from "node:process";
-import { existsSync, statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 
 // Splits on whitespace outside quotes. A quoted section joins the token it sits in, quotes removed,
@@ -18,10 +18,10 @@ export function splitArgs(raw) {
 // which only the flag covers.
 export const DEFAULT_AGENT_ARGS = Object.freeze(["acp", "--dangerously-skip-permissions"]);
 
-// shell:true on win32 lets a .cmd or .bat launcher resolve, and cmd.exe parses the line; a .ps1 is
-// started through PowerShell at the spawn (spawnArgv). Safe because both values come from the
-// environment, as trusted as this process. Never route host or caller input into them: that would
-// be command injection.
+// shell:true on win32 marks the spec for the Windows launch at each spawn site (spawnArgv): the
+// command is found first and started by file type, and only a .cmd or .bat reaches cmd.exe, which
+// parses its line. Safe because both values come from the environment, as trusted as this process.
+// Never route host or caller input into them: that would be command injection.
 export function resolveAcpSpawn() {
   const command = process.env.ACP_AGENT_COMMAND || "agy";
   const args = process.env.ACP_AGENT_ARGS
@@ -52,50 +52,69 @@ export function spawnCommandLine(command, args, options) {
 }
 
 /**
- * What to hand spawn() for a spec. Applied at each spawn site, after doctor has built its
- * --version args from the spec as configured.
+ * What to hand spawn() for a spec, or null when the launcher is not found. Applied at each spawn
+ * site, after doctor has built its --version args from the spec as configured. On win32 the command
+ * is looked up on every spawn (an update can move it) and started by the type of the file found:
+ * an .exe or .com directly, a .ps1 through PowerShell, anything else through cmd.exe.
  * @param {string} command @param {string[] | undefined} args
  * @param {{ shell?: boolean, env?: NodeJS.ProcessEnv } | undefined} options
- * @returns {{ command: string, args: string[], options: any }}
+ * @returns {{ command: string, args: string[], options: any } | null}
  */
 export function spawnArgv(command, args, options) {
   const argv = args ?? [];
-  if (!(options?.shell && process.platform === "win32")) return { command, args: argv, options };
+  if (!options?.shell) return { command, args: argv, options };
   const env = options.env || process.env;
+  if (process.platform !== "win32") return commandExists(command, env) ? { command, args: argv, options } : null;
+  const file = findCommand(command, env);
+  if (!file) return null;
+  const ext = path.extname(file).toLowerCase();
+  // Exact arguments: cmd.exe would expand %VAR% and strip quotes and carets.
+  if (ext === ".exe" || ext === ".com") return { command: file, args: argv, options: { ...options, shell: false } };
   // cmd.exe hands a .ps1 to its file association (an editor or an "open with" dialog) instead of
-  // running it. Only that exact file: x.ps1.cmd is cmd's to run.
-  const name = String(command).replace(/^["']|["']$/g, "");
-  const script = /\.ps1$/i.test(name) ? findCommand(name, env, true) : null;
-  if (!script) return { command, args: argv, options };
-  const rootKey = Object.keys(env).find((k) => k.toUpperCase() === "SYSTEMROOT");
-  const powershell = rootKey && env[rootKey]
-    ? path.win32.join(env[rootKey], "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-    : "powershell.exe";
-  return {
-    command: powershell,
-    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...argv],
-    options: { ...options, shell: false },
-  };
+  // running it.
+  if (ext === ".ps1") {
+    const rootKey = Object.keys(env).find((k) => k.toUpperCase() === "SYSTEMROOT");
+    const powershell = rootKey && env[rootKey]
+      ? path.win32.join(env[rootKey], "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+      : "powershell.exe";
+    return {
+      command: powershell,
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file, ...argv],
+      options: { ...options, shell: false },
+    };
+  }
+  return { command: file, args: argv, options };
 }
 
-// Through a shell the spawn always succeeds (cmd.exe starts, then fails to find the launcher), so a
-// missing agy would read as an agent crash.
 export function commandExists(command, env = process.env) {
   return findCommand(command, env) !== null;
 }
 
-// The file cmd's lookup lands on, or null: a path as given, a bare name in each PATH entry, each
-// with and without every PATHEXT extension. exact skips the extensions.
-function findCommand(command, env, exact = false) {
+// The file cmd's lookup lands on, as an absolute path (the spawn may run in another directory), or
+// null: a path as given, a bare name in each PATH entry, each with and without every PATHEXT
+// extension. On win32 a file with no extension never matches: cmd reports it "not recognized"
+// (measured), and npm installs an sh script of that name beside the .cmd.
+function findCommand(command, env) {
   const name = String(command || "").replace(/^["']|["']$/g, "");
   if (!name) return null;
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH");
   const extKey = Object.keys(env).find((k) => k.toUpperCase() === "PATHEXT");
-  const exts = exact ? [""] : ["", ...String((extKey && env[extKey]) || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)];
-  const isFile = (p) => { try { return existsSync(p) && statSync(p).isFile(); } catch { return false; } };
+  const exts = ["", ...String((extKey && env[extKey]) || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)];
+  const win32 = process.platform === "win32";
+  const isFile = (p) => {
+    if (win32 && !path.extname(p)) return false;
+    try {
+      return statSync(p).isFile();
+    } catch (e) {
+      // A Store app's alias (WindowsApps\pwsh.exe) is a link into a folder this user cannot stat,
+      // so stat fails with EACCES, yet cmd runs it. A link to a missing file fails with ENOENT.
+      if (!win32 || (e.code !== "EACCES" && e.code !== "EPERM")) return false;
+      try { return lstatSync(p).isSymbolicLink(); } catch { return false; }
+    }
+  };
   const hit = (base) => {
     for (const ext of exts) {
-      for (const p of [base + ext, base + ext.toLowerCase()]) if (isFile(p)) return p;
+      for (const p of [base + ext.toLowerCase(), base + ext]) if (isFile(p)) return path.resolve(p);
     }
     return null;
   };

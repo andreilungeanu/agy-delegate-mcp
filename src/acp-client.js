@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
 import { JsonRpcPeer } from "./jsonrpc.js";
 import { createRequestRouter } from "./request-router.js";
-import { commandExists, resolveAcpSpawn, spawnArgv, spawnCommandLine } from "./spawn.js";
+import { resolveAcpSpawn, spawnArgv, spawnCommandLine } from "./spawn.js";
 import { DETACHED, isChildAlive, treeKill } from "./proc.js";
 import { VERSION } from "./version.js";
 import { makeError } from "./errors.js";
@@ -55,14 +55,16 @@ export class AcpClient extends EventEmitter {
 
   start() {
     const { command, args, options } = this.spawnSpec;
-    if (/** @type {{ shell?: boolean }} */ (options)?.shell && !commandExists(command)) {
+    // Found before the spawn: through cmd.exe a missing launcher still spawns, and would read as an
+    // agent crash.
+    const launch = spawnArgv(command, args, options);
+    if (!launch) {
       return Promise.reject(makeError("spawn-failed", `Failed to spawn agent (${command}): not found on PATH. Install the Antigravity CLI (agy) and sign in by running agy once.`));
     }
     this._stderrChunks = [];
     this._stderrLength = 0;
     const stderrDecoder = new StringDecoder("utf8");
     this._exitEmitted = false;
-    const launch = spawnArgv(command, args, options);
     const [file, argv] = spawnCommandLine(launch.command, launch.args, launch.options);
     this.child = spawn(file, argv, { ...launch.options, ...(this.cwd ? { cwd: this.cwd } : {}), detached: DETACHED, stdio: ["pipe", "pipe", "pipe"] });
     this.child.stderr.on("data", (chunk) => {
