@@ -263,6 +263,9 @@ export async function runDelegateTool({ args, extra, runDelegate, inFlight, pend
   }
 }
 
+// cancel and steer take the id delegate announces; a blank one is a malformed call, not a stale id.
+const sessionIdInput = z.string().trim().min(1).describe("From delegate's \"session ready: <id>\" progress notification or its result.");
+
 /**
  * @param {{
  *   runDelegate?: (opts: any) => Promise<any>,
@@ -302,7 +305,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       description:
         "Best-effort cancel of an in-flight delegation by sessionId. session/cancel is advisory — the agent may finish the turn anyway, and the delegate result then carries cancelRequested. Status: cancelled, killed (agent process observed to exit), not-running (turn already ended, still resumable), not-found (id not in this process's recent session history).",
       inputSchema: {
-        sessionId: z.string(),
+        sessionId: sessionIdInput,
         force: z.boolean().default(false).describe("Kill the agent process if the turn is still running after a short grace period."),
       },
       annotations: {
@@ -374,7 +377,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       description:
         "Redirect an in-flight delegation by sessionId: message goes to agy as a new instruction for the running turn, and the delegate call returns the redirected turn's result. Status: steered (sent), not-ready (prompt not sent yet; retry), not-running (turn already ended — resume instead), not-found (id not in this process's recent session history).",
       inputSchema: {
-        sessionId: z.string(),
+        sessionId: sessionIdInput,
         message: z.string().trim().min(1, "message must not be blank").describe("The new instruction for agy."),
       },
       annotations: {

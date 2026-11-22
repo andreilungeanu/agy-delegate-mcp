@@ -1211,3 +1211,22 @@ test("a second signal during shutdown exits at once", { skip: process.platform =
     }
   }
 });
+
+// A blank id matched nothing and came back not-found, which reads as a stale session rather than
+// a malformed call.
+test("cancel and steer reject a blank sessionId, and trim one with stray whitespace", async () => {
+  const server = buildServer({ runDelegate: async () => ({}) });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    for (const [name, extra] of [["cancel", {}], ["steer", { message: "go" }]]) {
+      const blank = await client.callTool({ name, arguments: { sessionId: "  ", ...extra } });
+      assert.equal(blank.isError, true, `${name} must reject a blank id`);
+      const padded = await client.callTool({ name, arguments: { sessionId: " sess-x ", ...extra } });
+      assert.deepEqual(payload(padded), { status: "not-found", sessionId: "sess-x" });
+    }
+  } finally {
+    await client.close();
+  }
+});
