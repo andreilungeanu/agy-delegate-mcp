@@ -76,9 +76,10 @@ diagnostic, not fail the call.
   to `plan`. `ask` also prefixes the prompt with an answer-only instruction; agy has no ask mode.
 - **Resume**: `session/resume`, which restores the conversation without replaying it. agy opens a
   resumed session at its default model, thinking level and mode, so all three are compared and
-  re-sent; a `model` the caller leaves out is taken from what this process last set on the session,
-  and an omitted `effort` likewise unless `model` changes. agy answers an unknown id and a failed read with the same `-32603`; the bridge checks
-  `session/list` (every session the account has, one page) and starts fresh only for an id agy
+  re-sent; a `model` the caller leaves out is taken from what this process recorded for the session
+  (the model agy ran when model or effort was last set), and an omitted `effort` likewise unless
+  `model` changes. agy answers an unknown id and a failed read with the same `-32603`; the bridge
+  checks `session/list` (every session the account has, one page) and starts fresh only for an id agy
   does not list.
 - **Plan**: in plan mode agy writes the plan with a `write_file` call carrying `ArtifactMetadata`,
   to `~/.gemini/antigravity-cli/brain/<sessionId>/`. The bridge returns its `Content` as
