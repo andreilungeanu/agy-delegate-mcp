@@ -23,10 +23,8 @@ if (nodeMajor < 20) {
   process.exit(1);
 }
 
-// sessionId -> the set of delegations currently running on it. A set, not a single handle,
-// because a resume can race the turn it resumes: both are live, both are cancellable, and
-// keying one handle per id let whichever finished first deregister the other — after which
-// cancel reported a running session as already ended.
+// sessionId -> the delegations running on it. A set: a resume can race the turn it resumes, and
+// with one handle per id the first to finish would deregister the other.
 const inFlight = new Map();
 function registerInFlight(map, sessionId, handle) {
   const handles = map.get(sessionId);
@@ -43,37 +41,29 @@ function unregisterInFlight(map, sessionId, handle) {
   handles.delete(handle);
   if (handles.size === 0) map.delete(sessionId);
 }
-// Delegations whose session has not opened yet. inFlight is keyed by session id, and that id
-// arrives about 3.4s after the agent process does — so between client.start() and session/new
-// there is a live, auto-approved agent that the map cannot name. Shutdown walks this too.
-// cancel deliberately does not: an id the caller has never been given is not one it can pass.
+// Delegations whose session has not opened yet (about 3.4 s after the spawn): a live agent that
+// inFlight cannot name. Shutdown walks this; cancel cannot, having no id to pass.
 const pendingDelegations = new Set();
 
-// Session ids seen this process, kept after the turn ends so cancel can tell a finished
-// session (resumable, only the turn is over) from an id that never existed. Bounded so a
-// long-lived server does not grow without limit.
+// Session ids seen by this process, kept after the turn so cancel can tell a finished session
+// (still resumable) from an unknown id. Bounded.
 const seenSessions = new Set();
 const SEEN_SESSIONS_CAP = 500;
 function rememberSession(set, id) {
   if (id == null) return;
-  // Set iteration order makes the delete-then-add a small LRU: a session that is still being
-  // resumed moves back to the recent end, so it outlives an equally old id that was seen once
-  // and never again. Without it the id a caller is actually working with ages out on insertion
-  // order alone, and cancel then calls a live, resumable session one that never existed.
+  // Delete-then-add makes the Set an LRU, so a session still being resumed does not age out.
   if (set.has(id)) set.delete(id);
   set.add(id);
   if (set.size > SEEN_SESSIONS_CAP) set.delete(set.values().next().value);
 }
 
-// Loaded at connect, before any tool schema is, so this carries only pre-call facts: what a
-// caller needs to decide whether to delegate at all. Call-time facts belong on the parameter
-// descriptions, read while the call is being written.
+// Loaded at connect: only what a caller needs to decide whether to delegate. Call-time facts go on
+// the parameter descriptions.
 export const SERVER_INSTRUCTIONS = `Delegate coding work to Antigravity (agy) through the delegate tool. Every permission the agent requests is auto-approved, in every mode: agent/plan/ask reach any file the user account can, and mode instructs the agent rather than limiting it. Scope workspace tightly and review the git diff after every run — filesReportedByEditTools carries only what the agent's edit tools reported; the diff is authoritative.`;
 
-// No outputSchema: that also requires structuredContent, and a host that reads both (Codex)
-// puts the payload in context twice. One JSON text block; the .strict() copy is in
-// delegate.test.js. Field meanings: skills/delegate/reference.md. cancel and steer statuses
-// live on their tool descriptions.
+// No outputSchema: it requires structuredContent too, and a host that reads both (Codex) puts the
+// payload in context twice. The .strict() copy is in delegate.test.js; field meanings are in
+// skills/delegate/reference.md.
 export const delegateOutputShape = {
   result: z.string(),
   resultSource: z.enum(["pre-tool-fallback", "unfinished-tool", "none"]).optional(),
@@ -106,9 +96,9 @@ export const delegateOutputShape = {
   })).optional(),
 };
 
-// Same in-repo contract as delegateOutputShape. Relayed agent fields stay unknown so a
-// weird protocolVersion is a diagnostic, not a failed call. doctor.test.js holds the
-// strict copy. Handshake is its own shape: a .strict() on agent does not look inside it.
+// Same in-repo contract; the strict copy is in doctor.test.js. Relayed agent fields stay unknown,
+// so an odd value is a diagnostic, not a failed call. Its own shape because .strict() on agent
+// does not look inside it.
 export const doctorHandshakeShape = {
   ok: z.boolean(),
   error: z.string().optional(),
@@ -118,7 +108,7 @@ export const doctorHandshakeShape = {
   currentModel: z.unknown().optional(),
   modes: z.array(z.unknown()).optional(),
   tier: z.unknown().optional(),
-  // Built here rather than relayed, so it gets a real type where its neighbours get z.unknown().
+  // Built here, not relayed, so it gets a real type.
   currentModelOptions: z.array(z.object({
     id: z.string(),
     name: z.string().optional(),
@@ -161,15 +151,12 @@ export const delegateInputSchema = z.object({
   resumeSessionId: z.string().trim().optional().describe("Continue an existing agy session."),
   workspace: z.string().trim().min(1, "workspace must not be blank").describe("The agent's working directory, not a limit. Smallest directory holding the task's files; with no such directory the project root is the floor. Must already exist; never create one for the call."),
   model: z.string().trim().min(1, "model must be a non-empty string").optional().describe("agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, agy's default runs (a resume keeps the model last set on the session) and effectiveModel names it. doctor deep:true lists every id."),
-  // Which values a model offers is only knowable after selecting it, so this stays an open
-  // string and the bridge validates the exact token against the live option list.
+  // Open string: a model's levels are known only once it is selected, and are validated then.
   effort: z.string().trim().min(1).optional().describe("agy thinking level for the selected model (low, medium, high, xhigh). Levels differ per model; invalid values fail before the prompt and name the accepted set. Pass only when the user asks for agy effort — the host's own reasoning setting is unrelated."),
   contextFiles: z.array(z.string()).optional().describe("Paths to attach instead of pasting contents into spec. Text becomes references the agent may open; images (png/jpg/gif/webp, <5MB) are sent inline. Relative paths resolve against workspace but are not limited to it. Skips are reported in protocolWarnings, never fatal."),
 });
 
-// Every turn running on the id is steered, as cancel cancels every one: the caller named a
-// session. A delegation still setting up takes no steer until its prompt is out (not-ready); one
-// whose turn ended, was cancelled or lost its agent, but is still tearing down, is not-running.
+// Steers every turn running on the id, as cancel does: the caller named a session.
 export function steerSession(map, seen, sessionId, message) {
   const handles = map.get(sessionId);
   if (!handles || handles.size === 0) return seen.has(sessionId) ? "not-running" : "not-found";
@@ -202,8 +189,7 @@ export async function runDelegateTool({ args, extra, runDelegate, inFlight, pend
   if (progressToken != null) {
     let progress = 0;
     onProgress = (message) => {
-      // sendNotification is async: its rejection settles outside this try and would exit the
-      // server. The try stays for a sync throw, which lands before Promise.resolve can wrap it.
+      // An unhandled rejection would exit the server; the try catches a sync throw.
       try {
         Promise.resolve(extra.sendNotification({
           method: "notifications/progress",
@@ -233,34 +219,27 @@ export async function runDelegateTool({ args, extra, runDelegate, inFlight, pend
       },
       onSessionReady: (sessionId, client) => {
         capturedSessionId = sessionId;
-        // The same handle moves across, so a shutdown racing this boundary finds it on exactly
-        // one side of it rather than on neither.
+        // The same handle moves across, so a racing shutdown finds it on one side.
         handle ??= { client, cancelRequested: false };
         pending.delete(handle);
         registerInFlight(inFlight, sessionId, handle);
         rememberSession(seenSessions, sessionId);
-        // Emit the id the moment the session opens, before the turn finishes, so a host that
-        // can call tools concurrently has something to pass to cancel mid-run — otherwise the
-        // id only arrives when delegate returns, by which point there is nothing to cancel.
-        // (Hosts that serialize tool calls still cannot cancel in flight; that is a host limit.)
+        // Sent as the session opens, so a host that calls tools concurrently can cancel or steer
+        // mid-run.
         onProgress(`session ready: ${sessionId}`);
       },
-      // From here the turn is decided and agy is only closing; cancel and steer read this.
       onTurnEnd: () => { if (handle) handle.ended = true; },
     });
     if (handle?.cancelRequested) out.cancelRequested = true;
     return { content: [{ type: "text", text: JSON.stringify(out) }] };
   } catch (err) {
     return {
-      // The reason is already decided upstream; naming it here saves the caller parsing
-      // prose to tell a timeout from a rejected argument.
+      // The reason in brackets spares the caller parsing prose.
       content: [{ type: "text", text: `delegate failed${err?.reason ? ` [${err.reason}]` : ""}: ` + (err?.message || String(err)) }],
       isError: true,
     };
   } finally {
-    // Drops only this delegation's own handle; the id stays registered while another turn
-    // is still running on it. A delegation that failed before its session opened is only ever
-    // in pending, and one that opened is only ever in the map — the delete covers both.
+    // Only this delegation's handle; the id stays registered while another turn runs on it.
     if (handle) pending.delete(handle);
     if (capturedSessionId) unregisterInFlight(inFlight, capturedSessionId, handle);
   }
@@ -322,13 +301,12 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
     async ({ sessionId, force }) => {
       const handles = inFlight.get(sessionId);
       if (!handles || handles.size === 0) {
-        // A finished session and a garbage id are both "not in flight". Reporting them alike
-        // would read as "bad id" for a session that ran and is still resumable.
+        // A finished session is still resumable, unlike an unknown id.
         const known = seenSessions.has(sessionId);
         return statusResult(known ? "not-running" : "not-found", sessionId);
       }
-      // A handle whose turn has ended stays registered while agy closes. A cancel there is not
-      // aimed at a turn: the result is left alone, and force only cuts the close short.
+      // A handle whose turn ended stays registered while agy closes. A cancel leaves its result
+      // alone; force only cuts the close short.
       const ending = [...handles].filter((handle) => handle.ended);
       const live = [...handles].filter((handle) => !handle.ended);
       const stopQuietly = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
@@ -336,19 +314,16 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         if (force) await Promise.all(ending.map(stopQuietly));
         return statusResult("not-running", sessionId);
       }
-      // Cancel every turn running on the id: the caller named a session, not one of the
-      // turns that happen to share it.
+      // Every turn running on the id: the caller named a session.
       for (const handle of live) handle.cancelRequested = true;
       await Promise.all(live.map((handle) => handle.client.cancel(sessionId).catch(() => {})));
       if (!force) {
-        // The handles stay registered: session/cancel is best-effort, so the turn may still
-        // be running. Dropping them here made the natural escalation — cancel, wait, cancel
-        // with force — report not-found while the agent was alive. Each delegation's own
-        // finally removes its handle when the turn actually settles.
+        // The handles stay registered: session/cancel is best-effort, and a follow-up force must
+        // still find a turn that kept running.
         return statusResult("cancelled", sessionId);
       }
-      // Each turn's close is cut as soon as that turn settles, not when the last one does; agy
-      // stops a cancelled turn in milliseconds. What is still running when the grace ends is killed.
+      // Each turn's close is cut as soon as it settles (agy stops a cancelled turn in milliseconds);
+      // what still runs when the grace ends is killed.
       const closing = ending.map(stopQuietly);
       const cut = new Set();
       const graceEnds = Date.now() + forceGraceMs;
@@ -363,16 +338,13 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         await new Promise((r) => setTimeout(r, Math.min(50, Math.max(1, graceEnds - Date.now()))));
       }
       await Promise.all(closing);
-      // Snapshot before awaiting stop. A resume that registers during teardown must not be
-      // swept out of the map — it was never killed, and inFlight.delete(sessionId) would
-      // hide it from cancel and shutdown.
+      // A snapshot, so a resume registering during teardown is not swept from the map.
       const toKill = live.filter((handle) => !cut.has(handle));
       if (toKill.length === 0) return statusResult("cancelled", sessionId);
       const observed = await Promise.all(
         toKill.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false))
       );
-      // "killed" claims the process is gone, so it needs the exit, not just a dispatched signal.
-      // When one does not follow, the handles stay registered and force can be tried again.
+      // "killed" needs an observed exit; without one the handles stay and force can be retried.
       if (!observed.every(Boolean)) return statusResult("cancelled", sessionId);
       for (const handle of toKill) unregisterInFlight(inFlight, sessionId, handle);
       return statusResult("killed", sessionId);
@@ -419,7 +391,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       },
     },
     async ({ deep }, extra) => {
-      // doctor's agent sits in pending while it runs, where shutdown already looks.
+      // In pending while it runs, so shutdown stops doctor's agent too.
       let handle;
       try {
         const out = await runDoctor({
@@ -462,63 +434,49 @@ export function installSignalCleanup(map, {
   let shuttingDown = false;
   let signalsSeen = 0;
   const shutdown = (code, fromSignal = false) => {
-    // A second signal skips the wait below: the kills are already dispatched, and a caller that
-    // has asked twice wants out now. A stdin EOF is not an ask of its own: a hangup closes stdin
-    // and sends SIGHUP, in either order.
+    // Only a second signal skips the wait for the kills: a hangup closes stdin and sends SIGHUP,
+    // in either order. The first stops may still be in their ps walk, so the groups are killed
+    // synchronously before leaving.
     if (fromSignal) signalsSeen++;
     if (shuttingDown) {
       if (signalsSeen < 2) return undefined;
-      // The first stops may still be walking the tree with ps; kill the groups before leaving.
       for (const handles of [...map.values(), pending]) {
         for (const handle of handles) { try { handle.client.killNow?.(); } catch {} }
       }
       return exit(code);
     }
     shuttingDown = true;
-    // Set in the handler, not left to the exit below: a loop that runs dry on its own still
-    // has to die with the code the signal asked for, and the scheduled exit may never get a
-    // turn to run.
+    // Set now: if the loop runs dry before the scheduled exit, the process still exits with it.
     setExitCode(code);
     const stops = [];
-    // A stop that did not see the exit is retried once, as the delegation itself does; leaving on
-    // the first would exit with that retry still pending.
+    // A stop that did not see the exit is retried once, as the delegation does.
     const stopOnce = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
     const dispatch = (handle) => {
       try { stops.push(stopOnce(handle).then((exited) => (exited === false ? stopOnce(handle) : exited))); } catch {}
     };
     for (const handles of map.values()) for (const handle of handles) dispatch(handle);
-    // Delegations still inside their handshake. The agent is already running for these, and this
-    // is the only place it is reachable from — they have no session id to be keyed under yet.
+    // Delegations still in their handshake, with no session id yet.
     for (const handle of pending) dispatch(handle);
-    // On Windows the kill is a separate taskkill process: exiting before it walks the tree
-    // orphans everything below the shell wrapper — the ps1 launcher and the versioned agent
-    // were measured surviving the server's exit. stop() bounds itself (observed exit or its
-    // own deadline), so this wait is short and finite on every platform.
-    // Scheduled rather than called from the kill's own continuation, so the exit runs on a
-    // clean loop turn instead of on the settlement stack.
+    // Exit waits for the kills: on Windows taskkill is a separate process, and exiting first left
+    // the launcher and agent running (measured). stop() bounds itself. The exit is scheduled onto
+    // a clean loop turn, off the settlement stack.
     const leave = () => schedule(() => exit(code));
     Promise.all(stops).then(leave, leave);
   };
-  // Each agent runs in its own process group on POSIX, so a signal aimed at this process no
-  // longer reaches it. Installing a handler replaces Node's default; swallowing Ctrl-C would
-  // leak the agent. shutdown() already walks pending, so this covers spawn through session/new.
+  // On POSIX each agent has its own process group, so a signal to this process does not reach it.
+  // The handler replaces Node's default and must exit, not swallow the signal.
   if (DETACHED) {
     // SIGHUP is a closed terminal; its default would end the server without stopping the agents.
     const signals = /** @type {[NodeJS.Signals, number][]} */ ([["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]);
     for (const [signal, code] of signals) process.on(signal, () => shutdown(code, true));
   }
-  // Closing the server's stdin is how a stdio host shuts the transport down, and it is what a
-  // host reaches for before it resorts to a signal. The SDK transport does not listen for it —
-  // it subscribes to `data` and `error` only — so EOF leaves this process up with a delegation
-  // still running and nobody left to hand it to.
+  // A stdio host shuts down by closing stdin, which the SDK transport does not watch.
   stdin.on("end", () => shutdown(0));
 }
 
 if (isMain) {
-  // Without this the flag falls through to the transport, which owns stdout and waits on stdin —
-  // so confirming an install meant wiring the server into a host first. Reads the package.json
-  // beside this file, so it reports the code that is actually running rather than what a
-  // manifest pinned. stdout is free here because the transport never starts.
+  // Confirms an install without a host. Reads the package.json beside this file, so it reports the
+  // code that runs, not a manifest pin.
   const argv = process.argv.slice(2);
   if (argv.includes("--version") || argv.includes("-v")) {
     console.log(readPackageVersion());

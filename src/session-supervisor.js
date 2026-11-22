@@ -11,9 +11,8 @@ export class SessionSupervisor {
     this.client = client;
     this.handshakeMs = handshakeMs;
     this.hardCapMs = hardCapMs;
-    // Mid-turn idle detection is opt-in and off by default. agy emits no ACP frames while a
-    // shell command runs, so silence during a prompt turn says nothing about liveness: a
-    // running `ping -n 60` produced no frame between its tool_call and the cancel 7s later.
+    // Opt-in: agy sends no frames while a shell command runs, so mid-turn silence says nothing
+    // about liveness.
     this.idleMs = idleMs > 0 ? idleMs : 0;
     this.sessionId = null;
     this.lastActivityAt = Date.now();
@@ -31,7 +30,7 @@ export class SessionSupervisor {
     this._onExit = (info) => {
       this._trip(
         "agent-exit",
-        // Kept whole, for the reason acp-client.js states where it builds the same message.
+        // stderr kept whole, as in acp-client.js.
         `agent exited (code=${info.code}${info.signal ? ", signal=" + info.signal : ""})${info.stderr ? ": " + String(info.stderr) : ""}`
       );
     };
@@ -41,8 +40,7 @@ export class SessionSupervisor {
     this.sessionId = sessionId;
   }
 
-  // True once the delegation is decided: a trip (exit, abort, a deadline) or the work's own end.
-  // Work still running after a trip reads this to stop, since the race no longer awaits it.
+  // True once decided (a trip or the work's end); work still running after a trip reads it to stop.
   get settled() {
     return this._settled;
   }
@@ -64,9 +62,7 @@ export class SessionSupervisor {
     }, this.handshakeMs);
   }
 
-  // The handshake is strict request/response, so silence there is real evidence of a
-  // wedged agent. Once the prompt is in flight that stops being true, and the deadline
-  // must come off.
+  // Silence in the request/response handshake means a wedged agent; during the prompt it does not.
   promptStarted() {
     if (this._promptStarted) return;
     this._promptStarted = true;

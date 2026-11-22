@@ -8,13 +8,11 @@ function readVersion() {
   return JSON.parse(readFileSync(PKG_PATH, "utf8")).version;
 }
 
-// Captured once, for the ACP/MCP identity handshake that is sent at connect and never re-read.
+// Captured once, for the ACP and MCP identity sent at connect.
 export const VERSION = readVersion();
 
-// doctor reads fresh rather than using the constant: the MCP child is long-lived and
-// /reload-plugins does not restart it, so a version captured at process start goes stale after
-// an in-place upgrade — exactly when doctor is run to confirm the new version shipped. An
-// un-restarted child running old code stays a gap, but no in-process value can close that.
+// Read fresh for doctor: /reload-plugins does not restart the server, so the constant goes stale
+// after an in-place upgrade.
 export function readPackageVersion() {
   try {
     return readVersion();

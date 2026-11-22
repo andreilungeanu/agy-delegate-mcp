@@ -10,16 +10,11 @@ function readLogSize(raw) {
   return Math.floor(n);
 }
 
-// Depth an unparseable AGY_DELEGATE_TRANSCRIPT reads as. Deliberately not DEFAULT_LOG_SIZE:
-// that one bounds what the log retains in memory, this one is how much lands in the caller's
-// context. 1.10.0 removed a 40-frame always-on dump from failure text; opt-in is what buys this
-// budget, so keep it in that neighbourhood.
+// Depth for an unparseable AGY_DELEGATE_TRANSCRIPT. Not DEFAULT_LOG_SIZE: that bounds memory, this
+// bounds what lands in the caller's context.
 const TRANSCRIPT_DEFAULT_FRAMES = 50;
 
-// Frames of transcript AGY_DELEGATE_TRANSCRIPT asks for. Unset or blank means none and a
-// number is the count (0 = none); anything unparseable reads as on at the default depth —
-// "true" and "yes" are natural things to set, and silently disabling the transcript on them is
-// the opposite of what the setter wanted.
+// Unset or blank is none, a number is the count; anything else ("true", "yes") is the default depth.
 export function transcriptFrames(raw = process.env.AGY_DELEGATE_TRANSCRIPT) {
   if (raw === undefined || raw.trim() === "") return 0;
   const n = Number(raw);
@@ -44,25 +39,18 @@ export class JsonRpcPeer {
     this.onActivity = onActivity || (() => {});
     this.nextId = 1;
     this.pending = new Map();
-    // 0 disables recording and is documented; anything unparseable is a typo, and silently
-    // disabling the transcript on a typo is the opposite of what the setter wanted.
+    // 0 disables recording; a typo keeps the default rather than disabling it.
     this._logSize = readLogSize(process.env.ACP_LOG_SIZE);
-    // The failure transcript is the only thing that reads these frames, and it is opt-in, so
-    // recording by default retained up to _logSize × FRAME_CAP bytes per delegation that nothing
-    // would ever ask for. ACP_LOG_SIZE still bounds retention and still disables at 0.
+    // Only the opt-in failure transcript reads these frames, so they are recorded only when it is on.
     this._recording = this._logSize > 0 && transcriptFrames() > 0;
     this._log = [];
     this.rl = readline.createInterface({ input });
-    // The interface re-emits the input stream's error as its own, so the handler acp-client.js
-    // puts on the child's stdout does not cover this one: an unhandled 'error' here is an
-    // uncaught exception, which takes down the server and every concurrent delegation with it.
+    // readline re-emits the stream's error; unhandled, it takes down the server.
     this.rl.on("error", () => {});
     this.rl.on("line", (line) => this._onLine(line));
   }
 
-  // Trimming to the cap on every frame meant shifting a 2000-entry array per frame, which on a
-  // chatty turn cost more than parsing the frames. Let the array overshoot by a quarter and trim
-  // in one batch; readers below take the last _logSize, so what the log reports is unchanged.
+  // Trimmed in batches once a quarter over the cap; readers take the last _logSize.
   _record(dir, line) {
     if (!this._recording) return;
     const truncated = line.length > FRAME_CAP ? line.slice(0, FRAME_CAP) : line;
@@ -89,20 +77,16 @@ export class JsonRpcPeer {
     let msg;
     try { msg = JSON.parse(line); } catch { return; }
     if (msg === null || typeof msg !== "object" || Array.isArray(msg)) return;
-    // Only a parsed frame counts. A blank line, a launcher banner or anything else the agent
-    // prints is not the protocol advancing, and treating it as such is what let a chatty
-    // launcher hold the idle guard open and made "Last ACP frame Ns ago" report a stderr byte.
+    // Only a parsed frame counts as activity, not a banner or blank line.
     this.onActivity();
     const hasId = msg.id !== undefined && msg.id !== null;
     if (hasId && (msg.result !== undefined || msg.error !== undefined)) {
-      // Keyed by string: a peer that echoes "1" for the id 1 is still answering that request,
-      // and matching by identity left it pending until a timeout fired an hour later.
+      // Keyed by string: a peer may echo the id 1 as "1".
       const key = String(msg.id);
       const p = this.pending.get(key);
       if (p) {
         this.pending.delete(key);
-        // An agent can put the actual reason in error.data.message; error.message alone
-        // is a bare "Invalid params".
+        // The reason can be in error.data.message; error.message may be a bare "Invalid params".
         if (msg.error) {
           /** @type {import("./errors.js").DelegateError} */
           const err = new Error([msg.error.message || "rpc error", msg.error.data?.message].filter(Boolean).join(": "));

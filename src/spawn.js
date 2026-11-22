@@ -11,17 +11,14 @@ export function splitArgs(raw) {
   return args;
 }
 
-// --dangerously-skip-permissions makes agy approve its own tool calls instead of asking. The
-// request router still approves any session/request_permission that arrives, but agy issue
-// #1658 reports a subagent's command raising none and waiting for an approval that cannot come,
-// which only the flag reaches. With the flag, a probe turn raised no permission request at all.
+// --dangerously-skip-permissions makes agy approve its own tool calls. The request router approves
+// any permission request too, but a subagent's command can wait without raising one (agy #1658),
+// which only the flag covers.
 export const DEFAULT_AGENT_ARGS = Object.freeze(["acp", "--dangerously-skip-permissions"]);
 
-// shell:true on win32 is what lets a .cmd/.ps1 launcher resolve at all, and it means the
-// command and args are parsed by cmd.exe. Safe only because both come from the environment,
-// which is already as trusted as this process: anything that can set them can run code here
-// anyway. Routing host- or caller-supplied values into either variable would turn this into a
-// command-injection path, so don't.
+// shell:true on win32 lets a .cmd/.ps1 launcher resolve, and cmd.exe parses the line. Safe because
+// both values come from the environment, as trusted as this process. Never route host or caller
+// input into them: that would be command injection.
 export function resolveAcpSpawn() {
   const command = process.env.ACP_AGENT_COMMAND || "agy";
   const args = process.env.ACP_AGENT_ARGS
@@ -30,20 +27,17 @@ export function resolveAcpSpawn() {
   return { command, args, options: { shell: process.platform === "win32" } };
 }
 
-// Node 24 deprecates args passed alongside shell: true (DEP0190) and warns on the server's stderr.
-// Through a shell Node joins command and args with spaces and hands cmd.exe that line, so the
-// line is built here the same way and passed alone: cmd.exe receives the same bytes.
+// Node 24 warns (DEP0190) on args passed with shell: true. Node joins them with spaces anyway, so
+// joining here sends cmd.exe the same line without the warning.
 /** @returns {[string, string[]]} */
 export function spawnCommandLine(command, args, options) {
   const argv = args ?? [];
   return options?.shell ? [[command, ...argv].join(" "), []] : [command, argv];
 }
 
-// Through a shell the spawn itself always succeeds: cmd.exe starts, fails to find the launcher and
-// exits 1 with a localized "is not recognized" line, so Node's spawn 'error' event never fires and
-// a missing agy reads as an agent crash. Resolving the launcher first is what lets that case be
-// reported as not installed. Mirrors cmd's lookup: a path is checked as given, a bare name against
-// each PATH entry, both with and without each PATHEXT extension.
+// Through a shell the spawn always succeeds (cmd.exe starts, then fails to find the launcher), so a
+// missing agy would read as an agent crash. Mirrors cmd's lookup: a path as given, a bare name in
+// each PATH entry, each with and without every PATHEXT extension.
 export function commandExists(command, env = process.env) {
   const name = String(command || "").replace(/^["']|["']$/g, "");
   if (!name) return false;

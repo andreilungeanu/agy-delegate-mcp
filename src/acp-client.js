@@ -10,16 +10,13 @@ import { VERSION } from "./version.js";
 import { makeError } from "./errors.js";
 
 const STDERR_CAP = 64 * 1024;
-// How long stop() waits for the child to actually exit after the kill is dispatched. SIGKILL and
-// taskkill /F land in milliseconds, so this only ever elapses when the kill did not work.
+// How long stop() waits for the exit after the kill; it elapses only when the kill failed.
 const STOP_EXIT_TIMEOUT_MS = 2000;
 // How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
 export const GRACEFUL_STOP_MS = 2000;
 
-// Settlement order of prompt replies. A steer agy refuses settles before the turn it was aimed
-// at; one agy took over settles after it, since agy ends the redirected prompt at once. The
-// stamp is attached when the request is made, so it records when the reply came, not when the
-// delegation got round to reading it.
+// Settlement order of prompt replies: a refused steer settles before the turn it targets, one agy
+// took over settles after it. Attached at request time, so it records when the reply came.
 let settleSeq = 0;
 /** @returns {Promise<{ ok: true, value: any, seq: number } | { ok: false, error: any, seq: number }>} */
 export function stampSettlement(promise) {
@@ -27,18 +24,12 @@ export function stampSettlement(promise) {
 }
 
 export class AcpClient extends EventEmitter {
-  /**
-   * @param {{
-   *   spawnSpec?: { command: string, args: string[], options?: object },
-   * }} [opts]
-   */
   /** @param {{ spawnSpec?: any, cwd?: string }} [opts] */
   constructor({ spawnSpec, cwd } = {}) {
     super();
     this.spawnSpec = spawnSpec || resolveAcpSpawn();
-    // agy treats its process directory as part of the workspace, not only the session's cwd:
-    // started from the MCP server's directory it listed that directory and ran git status and
-    // git diff there (measured, agy 1.5.14). Started in the workspace, there is nothing else to see.
+    // agy treats its process directory as part of the workspace: started elsewhere, it ran git
+    // status there (measured, agy 1.5.14).
     this.cwd = cwd;
     this._stderrChunks = [];
     this._stderrLength = 0;
@@ -47,20 +38,15 @@ export class AcpClient extends EventEmitter {
     // Sessions opened on this process, which a graceful stop closes.
     /** @type {Set<string>} */
     this._sessions = new Set();
-    // "setup" until the delegation's prompt is on the wire, "open" while its turn runs, "closed"
-    // for good after: the turn ended, was cancelled, or the agent exited. steer reports which.
+    // setup until the prompt is on the wire, open while the turn runs, then closed for good.
     /** @type {"setup" | "open" | "closed"} */
     this._steerWindow = "setup";
     /** @type {Promise<any>[]} */
     this._steers = [];
   }
 
-  // stderr is captured but does not count as activity: the supervisor measures ACP frames, and
-  // an agent writing diagnostics is not the same fact as a turn making progress.
-  // The tail of stderr, which is what an exit error quotes. Kept as chunks and joined on read:
-  // rebuilding a 64KB string per chunk was the whole cost of a noisy agent. A StringDecoder
-  // holds partial UTF-8 across chunk boundaries, so a multi-byte character split by the pipe
-  // does not land in the error message as a replacement char.
+  // The stderr tail an exit error quotes; not counted as activity. Kept as chunks and joined on
+  // read, which is cheap for a noisy agent; the StringDecoder keeps split UTF-8 characters whole.
   get stderrBuffer() {
     const joined = this._stderrChunks.join("");
     return joined.length > STDERR_CAP ? joined.slice(-STDERR_CAP) : joined;
@@ -82,14 +68,11 @@ export class AcpClient extends EventEmitter {
       if (text) {
         this._stderrChunks.push(text);
         this._stderrLength += text.length;
-        // Drop whole chunks from the front only once well past the cap, so the common case
-        // costs one push. The joined tail is trimmed exactly on read.
+        // Whole chunks are dropped once past the cap; the tail is trimmed exactly on read.
         while (this._stderrChunks.length > 1 && this._stderrLength - this._stderrChunks[0].length >= STDERR_CAP) {
           this._stderrLength -= this._stderrChunks.shift().length;
         }
-        // Whole-chunk drops leave a remainder when one pipe read is itself larger than the cap
-        // (observed on GitHub Windows runners). Slice that first chunk so retained memory cannot
-        // grow with the flood; the public tail is still exactly one cap on read.
+        // A single read larger than the cap (seen on GitHub Windows runners) is sliced.
         const overflow = this._stderrLength - STDERR_CAP;
         if (overflow > 0) {
           this._stderrChunks[0] = this._stderrChunks[0].slice(overflow);
@@ -98,9 +81,7 @@ export class AcpClient extends EventEmitter {
       }
     });
     this.child.stderr.on("error", () => {});
-    // A supervisor trip writes session/cancel, which can land after the agent is already gone.
-    // Without a handler that surfaces as an unhandled 'error' event on some platforms, taking
-    // the whole MCP server down with it. stdout needs the same guard; readline adds none.
+    // A write after the agent is gone raises 'error'; unhandled, it takes down the server.
     this.child.stdin.on("error", () => {});
     this.child.stdout.on("error", () => {});
     const emitExit = (code, signal) => {
@@ -111,9 +92,7 @@ export class AcpClient extends EventEmitter {
       const stderr = this.stderrBuffer;
       const err = makeError(
         "agent-exit",
-        // stderr kept whole. This is the one string that says why the agent died — the model
-        // that was rejected, the quota that ran out, the login that expired — and the part that
-        // names it can sit anywhere in it. The 64KB ring buffer above is the bound.
+        // All of the (capped) stderr: the reason the agent died can sit anywhere in it.
         `agent exited (code=${code}${signal ? ", signal=" + signal : ""})${stderr ? ": " + String(stderr) : ""}`
       );
       // exit + rejectAllPending both settle the same Promise.race; second rejection is intentional.
@@ -127,8 +106,7 @@ export class AcpClient extends EventEmitter {
       onNotification: (method, params) => {
         if (method === "session/update") this.emit("update", params);
       },
-      // The router is async and its result discarded, so a throw from its own catch would reject
-      // unobserved and exit the process. Promise.resolve covers a sync router in tests.
+      // Caught: an unobserved rejection would exit the process. Promise.resolve covers a sync router.
       onRequest: (id, method, params) => {
         if (this.router) Promise.resolve(this.router(id, method, params)).catch(() => {});
       },
@@ -140,8 +118,6 @@ export class AcpClient extends EventEmitter {
     });
     return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       this.child.once("error", (e) => {
-        // Tagged like every other failure class so the caller gets
-        // "delegate failed [spawn-failed]: ..." instead of the one untagged prose error.
         const err = makeError("spawn-failed", `Failed to spawn agent (${command}): ${e.message}. Install the Antigravity CLI (agy) and sign in by running agy once.`);
         reject(err);
       });
@@ -149,8 +125,7 @@ export class AcpClient extends EventEmitter {
     }));
   }
 
-  // Stashed so the unknown-model pre-flight and doctor --deep can read the agent's real
-  // capability and model lists without paying for a second handshake.
+  // Kept for the model check and doctor, without a second handshake.
   async initialize() {
     const res = await this.peer.request("initialize", { protocolVersion: 1, clientInfo: { name: "agy-delegate-mcp", version: VERSION }, clientCapabilities: {} });
     this.protocolVersion = res?.protocolVersion;
@@ -165,9 +140,8 @@ export class AcpClient extends EventEmitter {
     this.sessionMeta = res?._meta;
     return res;
   }
-  // appendSystemPrompt goes in _meta.antigravity.systemPrompt.append, which agy advertises at
-  // initialize. agy stores it with the session: it holds across session/resume in a new process,
-  // and a _meta sent on resume is ignored (measured, agy 1.5.14).
+  // appendSystemPrompt goes in _meta.antigravity.systemPrompt.append. agy stores it with the session
+  // and ignores a _meta sent on resume (measured, agy 1.5.14).
   /** @param {string} cwd @param {{ appendSystemPrompt?: string }} [opts] */
   async newSession(cwd, { appendSystemPrompt } = {}) {
     const params = { cwd, mcpServers: [] };
@@ -189,12 +163,10 @@ export class AcpClient extends EventEmitter {
   setConfigOption(sessionId, configId, value) { return this.peer.request("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
   setMode(sessionId, modeId) { return this.peer.request("session/set_mode", { sessionId, modeId }); }
   prompt(sessionId, blocks) { return this.peer.request("session/prompt", { sessionId, prompt: blocks }); }
-  // agy takes a session/prompt sent while a turn runs as a redirect of that turn: the prompt in
-  // flight settles at once with end_turn, and the new one settles when the redirected turn ends
-  // (measured, agy 1.5.14). The delegation opens this window only while its prompt runs, so a
-  // steer can neither precede the task nor land after the delegation has read its result.
-  // prefix goes ahead of every steer's text, as ask mode's instruction goes ahead of the spec.
-  // Opening only moves on from setup: a window closed by a cancel or an exit stays closed.
+  // agy takes a session/prompt sent mid-turn as a redirect: the prompt in flight settles at once
+  // with end_turn, the new one when the redirected turn ends (measured, agy 1.5.14). The window is
+  // open only while the delegation's prompt runs, and a cancel or exit closes it for good. prefix
+  // goes ahead of each steer, as ask mode's instruction goes ahead of the spec.
   acceptSteers(on, prefix) {
     if (!on) { this._steerWindow = "closed"; return; }
     if (this._steerWindow === "setup" && !this.cancelRequested && !this._exitEmitted) {
@@ -207,16 +179,15 @@ export class AcpClient extends EventEmitter {
     if (this._steerWindow === "setup") return "not-ready";
     if (this._steerWindow !== "open" || !this.peer) return "not-running";
     const body = this._steerPrefix ? `${this._steerPrefix}\n\n${text}` : text;
-    // Stamped, and so never rejecting: the delegation reads ok/error, and a reply it never reaches
-    // cannot surface as an unhandled rejection.
+    // Stamped, so it never rejects unobserved.
     this._steers.push(stampSettlement(this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] })));
     return "steered";
   }
   hasSteer() { return this._steers.length > 0; }
   takeSteer() { return this._steers.shift(); }
-  // Recorded so a delegation waiting on a backgrounded command can stop waiting: after a cancel
-  // agy closes the call without the usage_update that ends a continuation.
-  // A cancel also closes the steer window: a steer accepted after it restarted the cancelled turn.
+  // Read by the background wait, which a cancelled turn's usage_update would not end, and closes
+  // the steer window: a later steer would restart the cancelled turn. delegate listens for the
+  // event to end its setup when no prompt has gone out.
   cancel(sessionId) {
     this.cancelRequested = true;
     this._steerWindow = "closed";
@@ -225,8 +196,8 @@ export class AcpClient extends EventEmitter {
     return Promise.resolve();
   }
 
-  // Synchronous last resort for a process about to exit: SIGKILL to the agent's group and to the
-  // agent, with no ps walk. POSIX only; on win32 the kill is taskkill, which stop() runs.
+  // Last resort for a process about to exit: SIGKILL to the group and the agent, no ps walk. POSIX
+  // only; on win32 the kill is taskkill, which stop() runs.
   killNow() {
     const pid = this.child?.pid;
     if (!pid || process.platform === "win32") return;
@@ -236,13 +207,10 @@ export class AcpClient extends EventEmitter {
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 
-  // Idempotent while teardown is in flight and after a confirmed exit. A missed exit is not
-  // memoized — force retries with a new treeKill. A confirmed exit stays so later callers join.
-  // graceMs > 0 first closes agy's sessions and its stdin and gives it that long to exit by
-  // itself; the tree kill follows either way. agy exits 0 in 200–400 ms that way and closes its
-  // conversation database, where a kill leaves its -shm and -wal files (measured, agy 1.5.14).
-  // A force stop (graceMs 0) that finds a graceful one in progress ends its grace now rather than
-  // waiting it out: force cancel and shutdown mean "kill".
+  // Memoized while in flight and after a confirmed exit; a missed exit is not, so a retry kills
+  // again. graceMs > 0 first closes the sessions and stdin and waits that long: agy then exits 0 in
+  // 200–400 ms with its database closed, where a kill leaves -shm and -wal files (measured, agy
+  // 1.5.14). The tree kill follows either way. A force stop ends a grace in progress.
   stop({ timeoutMs = STOP_EXIT_TIMEOUT_MS, graceMs = 0 } = {}) {
     if (this._stopping && graceMs <= 0) this._endGrace?.();
     if (!this._stopping) {
@@ -257,8 +225,8 @@ export class AcpClient extends EventEmitter {
     return this._stopping;
   }
 
-  // session/close stops the session's background commands and subagents, which a cancel leaves
-  // running (agy 1.5.10 changelog); closing stdin then ends agy. Bounded as a whole by graceMs.
+  // session/close stops background commands and subagents a cancel leaves running (agy 1.5.10
+  // changelog); stdin EOF then ends agy. Bounded by graceMs.
   async _closeGracefully(child, graceMs) {
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
@@ -289,13 +257,11 @@ export class AcpClient extends EventEmitter {
     }
     if (graceMs > 0 && isChildAlive(child)) await this._closeGracefully(child, graceMs);
     const alive = isChildAlive(child);
-    // Subscribed before the kill is dispatched. A child that dies immediately would otherwise
-    // exit in the gap and leave this waiting on an event that has already fired.
+    // Subscribed before the kill, so an immediate exit is not missed.
     const exited = alive
       ? /** @type {Promise<boolean>} */ (new Promise((resolve) => child.once("exit", () => resolve(true))))
       : Promise.resolve(true);
-    // Runs for an exited child too: the agent can be gone while the commands it spawned are still
-    // running, and on POSIX they stay in its process group, which is the only handle left on them.
+    // Also for an exited child: on POSIX its commands can outlive it in its process group.
     const killed = treeKill(child.pid, { childAlive: alive }).catch(() => {});
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
@@ -303,15 +269,12 @@ export class AcpClient extends EventEmitter {
       timer = setTimeout(() => resolve(false), timeoutMs);
     }));
     const observed = await Promise.race([exited, bounded]);
-    // The tree kill is awaited too, on the same deadline: on POSIX it walks the tree with ps before
-    // signalling, and an agent that exits by itself meanwhile resolved stop() with its session's
-    // commands not yet killed.
+    // The tree kill too, on the same deadline: on POSIX it walks the tree with ps first, and an agent
+    // exiting meanwhile would resolve stop() before its commands were killed.
     await Promise.race([killed, bounded]);
     clearTimeout(timer);
-    // The exit handler rejects in-flight RPCs with stderr. Doing that here on a confirmed
-    // exit would race it and the first settlement would drop the forensics. A stop that
-    // did not see the child die never gets that handler, so settle those RPCs only when
-    // the process is still alive and emitExit has not run.
+    // On an exit, emitExit rejects pending RPCs with stderr; rejecting here first would lose it.
+    // Only an unobserved exit settles them here.
     if (!observed && !this._exitEmitted && isChildAlive(child)) {
       try {
         this.peer?.rejectAllPending(makeError("agent-exit", "agent process did not exit after stop"));

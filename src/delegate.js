@@ -2,9 +2,8 @@ import process from "node:process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { statSync, realpathSync } from "node:fs";
-// Async: a sync read on the server's only thread stalls every other in-flight delegation and
-// its progress stream. The statSync calls below stay sync — they are argument validation and
-// run before the spawn.
+// Async: a sync read on the server's one thread stalls every other delegation. The statSync calls
+// below are pre-spawn argument validation and stay sync.
 import { readFile } from "node:fs/promises";
 import { AcpClient, GRACEFUL_STOP_MS, stampSettlement } from "./acp-client.js";
 import { DEFAULT_HARD_CAP_MS, SessionSupervisor } from "./session-supervisor.js";
@@ -16,10 +15,9 @@ import { transcriptFrames } from "./jsonrpc.js";
 
 export const DEFAULT_HANDSHAKE_MS = 60000;
 
-// The model and effort callers set on each session this process ran. agy reopens a resumed session
-// at its defaults (agy #1460, measured on 1.5.14) and every delegation is a new agy process, so a
-// resume that left model out ran agy's default model. Process-local: a restarted server starts
-// empty. Bounded as seenSessions is in server.js, refreshed on use.
+// Model and effort last set on each session by this process. agy reopens a resumed session at its
+// defaults (agy #1460, measured on 1.5.14), so a resume that omits them re-applies these. LRU,
+// bounded like seenSessions in server.js; a restarted server starts empty.
 const sessionSettings = new Map();
 const SESSION_SETTINGS_CAP = 500;
 function rememberSettings(id, settings) {
@@ -30,16 +28,14 @@ function rememberSettings(id, settings) {
 
 export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
 
-// The bridge's modes onto agy's. agy has no ask mode: ask runs in default with ASK_PREAMBLE
-// ahead of the spec. default asks before edits and commands, which the launch flag and the
-// request router both approve.
+// agy has no ask mode: ask runs in default with ASK_PREAMBLE ahead of the spec. default asks before
+// edits and commands; the launch flag and the request router approve them.
 const AGY_MODE = { agent: "default", plan: "plan", ask: "default" };
 const ASK_PREAMBLE = "Answer the question below. Do not edit files or run commands that change state.";
 export const DEFAULT_HEARTBEAT_MS = 30000;
 
-// Malformed values fall back to the default rather than failing the call. Only a positive value
-// counts, so a blank var (Number("") is 0) cannot arm a zero-length deadline. The idle guard's
-// documented 0 comes from its own fallback being 0, not from an env value.
+// A malformed or non-positive value falls back to the default, so a blank var (Number("") is 0)
+// cannot arm a zero-length deadline. The idle guard's 0 is its fallback, not an env value.
 function envMs(name, fallback) {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
@@ -52,19 +48,16 @@ function fmtDuration(ms) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
 }
 
-// A blank spec spins up a live session that only replies "No prompt content provided" —
-// a billed turn for nothing. Reject it before the spawn, like a bad workspace.
+// A blank spec still costs a billed turn (agy replies "No prompt content provided").
 function assertSpec(spec) {
   if (typeof spec === "string" && spec.trim() === "") {
     throw makeError("invalid-spec", "spec is empty. Provide a task brief.");
   }
 }
 
-// Named, never defaulted: under npx or a plugin launch the server's own cwd is a cache directory
-// or the user's home, so a defaulted workspace put an auto-approved agent to work on a tree
-// nobody asked about while every layer reported success. And without the existence check the
-// agent's first write creates the directory, so a typo spawns a parallel empty tree. Same check
-// contextFiles applies.
+// Required: under npx or a plugin the server's cwd is a cache directory or the user's home, the
+// wrong tree for an auto-approved agent. Must exist: the agent's first write would create it, so a
+// typo would start a parallel empty tree.
 function assertWorkspace(workspace) {
   if (typeof workspace !== "string" || workspace.trim() === "") {
     throw makeError("invalid-workspace", "workspace is required. Name the directory the agent should work in.");
@@ -87,19 +80,15 @@ const IMAGE_MIME = {
 // Base64 inflates by a third and every byte lands in the prompt, unlike a link.
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-// A resource_link hands the agent a path, not the file's bytes, so a large brief costs prompt
-// space only for what the agent opens. Images have no such form — they go inline. Both are
-// measured working on agy 1.5.13, including a link outside the workspace and both together.
-//   - gate images on the advertised capability: an agent that takes an unsupported block
-//     without error would drop the image silently;
-//   - report anything skipped — a dropped attachment is otherwise invisible.
+// A resource_link passes a path, so the agent spends prompt space only on what it opens; images
+// have no link form and go inline (both measured on agy 1.5.13, links outside the workspace too).
+// Images are gated on the advertised capability, since an agent may drop an unsupported block
+// silently, and every skip is reported.
 async function buildContextBlocks(contextFiles, workspace, client, warnings) {
   const blocks = [];
   // A glob plus an explicit path can resolve to one file; sending it twice wastes prompt space.
   const seen = new Set();
-  // Grouped, not one warning per file: a wrong workspace misses every attachment at once, and a
-  // line each would repeat the same root N times for one root cause. The other skip reasons stay
-  // per-entry — they are individually distinct and never arrive in bulk.
+  // Grouped: a wrong workspace misses every attachment at once. Other skips are reported per entry.
   const notFound = [];
   const root = path.resolve(workspace || process.cwd());
   const identKey = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
@@ -158,11 +147,9 @@ async function buildContextBlocks(contextFiles, workspace, client, warnings) {
   return blocks;
 }
 
-// agy answers session/resume for an unknown id with -32603 "Failed to read session <id>; retry,
-// or load it with session/load", the same code and wording a failed read of a real session would
-// carry. session/list settles it: agy lists every session the account has, so an id missing from
-// it is one agy does not have. Only that justifies a fresh session; anything else runs the task
-// without the context the caller asked for.
+// agy answers a resume of an unknown id and a failed read of a real one with the same -32603.
+// session/list settles it: agy lists every session the account has, and only an id missing from it
+// justifies a fresh session.
 async function sessionExists(client, sessionId) {
   try {
     const listed = await client.listSessions();
@@ -187,8 +174,7 @@ async function openSession(client, resumeSessionId, workspace) {
         + ` resumeSessionId to start fresh deliberately.`
       );
     }
-    // Starting fresh is right, but silently doing so leaves the caller unable to tell a
-    // stale id from a typo'd one — keep why the resume failed.
+    // Kept, so the caller can tell a stale id from a mistyped one.
     const fresh = await client.newSession(workspace);
     return { ...fresh, resumeError: `agy has no session ${resumeSessionId}` };
   }
@@ -196,10 +182,8 @@ async function openSession(client, resumeSessionId, workspace) {
 
 const isTokenCount = (v) => Number.isFinite(v) && v >= 0;
 
-// The token counts agy's session/prompt reply carries for that turn alone (measured, agy 1.5.14:
-// three one-line turns on one session reported 10273, 10406 and 10575 input tokens). Only the
-// fields ACP names, and only numbers, so an agent's extra keys stay out of the result. A steered
-// turn has one reply per prompt, each covering its own part, so they are summed.
+// The session/prompt reply's token counts cover that turn alone (measured, agy 1.5.14). Only ACP's
+// numeric fields are kept. A steered turn has one reply per prompt; they are summed.
 const USAGE_FIELDS = ["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens", "totalTokens"];
 const BREAKDOWN_FIELDS = new Set(["cachedReadTokens", "cachedWriteTokens", "thoughtTokens"]);
 export function readUsage(raws) {
@@ -222,10 +206,8 @@ function configOptionValue(configOptions, id) {
   return typeof opt?.currentValue === "string" ? opt.currentValue : undefined;
 }
 
-// The model ids a session accepts are the values of its model config option: base ids such as
-// gemini-4-neon, with the thinking level set separately. Reject anything else here, where the
-// list can be named — agy's own -32602 "Unknown model ID" names none. An agent that reports no
-// list is left alone.
+// The model option's values are the accepted base ids (the thinking level is set separately).
+// Checked here because agy's -32602 "Unknown model ID" names none. No list, no check.
 function assertKnownModel(configOptions, model) {
   const ids = allowedValues(modelOption(configOptions));
   if (ids.length === 0 || ids.includes(model)) return;
@@ -235,9 +217,8 @@ function assertKnownModel(configOptions, model) {
   );
 }
 
-// Sent only when the exact value appears under a thought-level option the selected model
-// advertised. Local validation keeps a bad token out of ACP and, more importantly, out of a
-// billed prompt. Missing capability data is not mislabeled as a caller mistake.
+// Sent only when the selected model advertises the exact value, so a bad one never reaches a billed
+// prompt. Missing capability data is reported as such, not as a caller error.
 async function applyEffort(client, sessionId, model, value, modelOptions) {
   const resolved = resolveEffort(modelOptions, value);
   if (resolved.status === "unavailable") {
@@ -294,10 +275,8 @@ export async function runDelegate({
   // the hard cap.
   backgroundWaitMs = envMs("AGY_DELEGATE_BACKGROUND_WAIT_MS", DEFAULT_BACKGROUND_WAIT_MS),
 } = {}) {
-  // Nothing between here and the abort listener below may await: addEventListener does not
-  // replay an abort that already fired, so an abort landing in that window would be lost.
-  // Throwing, not supervisor.abort(): tripping before supervise() installs its reject settles the
-  // supervisor with nothing listening.
+  // No await between here and the abort listener: addEventListener does not replay a past abort.
+  // Thrown rather than supervisor.abort(), which before supervise() settles with nothing listening.
   if (signal?.aborted) {
     throw makeError("aborted", "delegation aborted by MCP host");
   }
@@ -314,8 +293,7 @@ export async function runDelegate({
 
   const make = clientFactory || ((opts) => new AcpClient(opts));
   const client = make({ cwd: workspace });
-  // Handed over before the spawn, because from client.start() there is an agent process and the
-  // caller needs something that can stop it.
+  // Handed over before the spawn, so the caller can stop the agent from client.start() on.
   onClientReady?.(client);
   const supervisor = new SessionSupervisor(client, { idleMs: turnIdleMs, handshakeMs: shakeMs, hardCapMs: capMs });
   const onAbort = () => supervisor.abort();
@@ -332,8 +310,7 @@ export async function runDelegate({
   client.on?.("cancel", onCancel);
   const cancelledInSetup = { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
 
-  // The bridge cannot see inside a running shell command, so a long silence is reported
-  // rather than acted on: the caller gets elapsed time and frame age and can decide.
+  // The bridge cannot see inside a shell command, so silence is reported, not acted on.
   let promptInFlight = false;
   let heartbeat = null;
   const startHeartbeat = () => {
@@ -350,18 +327,15 @@ export async function runDelegate({
     heartbeat.unref?.();
   };
 
-  // Malformed frames noticed as they arrive, where protocolWarnings does not exist yet. Merged
-  // into it with the rest below.
+  // Collected as frames arrive; merged into protocolWarnings at the end.
   const frameWarnings = [];
   const steerWarnings = [];
 
-  // Diff blocks name the files an edit tool changed. agy sends them on the finished
-  // tool_call_update; tool_call is read too, since a frame that arrives already finished carries
-  // its content there.
+  // Diff blocks name the files an edit tool changed: agy sends them on the finished
+  // tool_call_update, or on tool_call when the call arrives already finished.
   const recordDiffs = (content) => {
-    // Array.isArray, not `|| []`: a non-array content is truthy and iterating it throws here, in
-    // the readline callback, where nothing awaits it. That is an uncaught exception — the whole
-    // server, not this one turn — and it also stops the reply after it from being read.
+    // Array.isArray, not `|| []`: iterating a truthy non-array throws in the readline callback, an
+    // uncaught exception that takes down the server.
     for (const c of Array.isArray(content) ? content : []) {
       if (!c || typeof c !== "object" || Array.isArray(c) || typeof c.type !== "string"
         || (c.type === "diff" && (typeof c.path !== "string" || !c.path))) {
@@ -377,8 +351,7 @@ export async function runDelegate({
     }
   };
 
-  // Only frames inside the prompt are read, so nothing the session sends while it opens is
-  // folded into this turn.
+  // Only frames inside the prompt count, not those sent while the session opens.
   client.on("update", (u) => {
     if (!promptInFlight) return;
     // One session per agy process today; the check keeps another session's frames out regardless.
@@ -389,8 +362,7 @@ export async function runDelegate({
     if (up.sessionUpdate === "usage_update" && isTokenCount(up.used) && isTokenCount(up.size) && up.size > 0) {
       state.contextUsage = { used: up.used, size: up.size };
     }
-    // The agent titles the turn a beat after the prompt lands — useful live, when several
-    // delegations run, and in timeout forensics. Kept out of the result.
+    // agy titles the turn shortly after the prompt; shown live and in stall errors, not in the result.
     if (up.sessionUpdate === "session_info_update" && typeof up.title === "string" && up.title) {
       if (up.title !== state.sessionTitle) { try { onProgress?.(`turn titled: ${up.title}`.slice(0, 200)); } catch {} }
       state.sessionTitle = up.title;
@@ -399,18 +371,15 @@ export async function runDelegate({
       state.thoughts.push(up.content.text);
     }
     if (up.sessionUpdate === "tool_call" || up.sessionUpdate === "tool_call_update") {
-      // An artifact is agy's own file (the plan, under its brain directory), reported as an
-      // artifact rather than as a workspace edit.
+      // An artifact is agy's own file (the plan, in its brain directory), not a workspace edit.
       const isArtifact = state.recordArtifact(up.rawInput ?? up.args);
       if (up.sessionUpdate === "tool_call") {
         state.startTool(up.toolCallId, up.status, up.name ?? up.title);
         const label = String(up.title || up.kind || "tool");
         const path = up.locations?.[0]?.path;
-        // Collapsed onto one line the way both readers of this take it: a progress notification
-        // and the "last tool call" line in a stall error. A command title arrives verbatim, so a
-        // multi-line script arrives with its newlines.
-        // agy's titles already name the file, with forward slashes where the location has
-        // backslashes, so the path is appended only when the title does not carry it.
+        // One line, for the progress note and the stall error (a command title keeps its newlines).
+        // agy's titles usually name the file, with forward slashes, so the path is appended only
+        // when the title lacks it.
         const slashed = (s) => String(s).replace(/\\/g, "/");
         const named = path && slashed(label).includes(slashed(path));
         state.lastToolLabel = (label + (path && !named ? " — " + path : "")).replace(/\s+/g, " ").trim();
@@ -428,13 +397,11 @@ export async function runDelegate({
     }
   });
 
-  // agy moves a shell command to the background once it outlasts the call's WaitMsBeforeAsync and
-  // ends the turn; kept alive, it finishes the command, marks the call completed and continues the
-  // turn unprompted, closing with a usage_update (measured, agy 1.5.14). Stopping agy at end_turn
-  // killed the command, so wait for that continuation instead. The hard cap still bounds it.
+  // agy backgrounds a shell command that outlasts WaitMsBeforeAsync and ends the turn; kept alive, it
+  // finishes the command and continues the turn unprompted, closing with a usage_update (measured,
+  // agy 1.5.14). Stopping agy at end_turn would kill the command. The hard cap still bounds the wait.
   let backgroundWaited;
-  // One clock for the delegation: a steered turn that leaves the command running resumes the wait
-  // rather than starting a fresh one.
+  // One clock per delegation, kept across steered turns.
   let backgroundStartedAt;
   const waitForBackground = async () => {
     try { onProgress?.(`waiting for agy's background command: ${state.lastToolLabel ?? "tool"}`.slice(0, 200)); } catch {}
@@ -473,10 +440,8 @@ export async function runDelegate({
       resumeError = sess.resumeError;
       supervisor.setSessionId(sessionId);
       onSessionReady?.(sessionId, client);
-      // The options the session reports in force, replaced by each config reply. A resumed
-      // session opens at agy's defaults rather than its saved settings (agy issue #1460,
-      // reproduced on 1.5.13), so model, effort and mode are compared and re-sent every time
-      // rather than assumed to have carried over.
+      // The options in force, replaced by each config reply. A resumed session opens at agy's
+      // defaults (agy #1460), so model, effort and mode are compared and re-sent every time.
       let options = client.configOptions;
       if (client.cancelRequested) return cancelledInSetup;
       // Only a resume that took inherits: a fallback to a fresh session is a different session.
@@ -497,11 +462,10 @@ export async function runDelegate({
       }
       if (client.cancelRequested) return cancelledInSetup;
       servedModel = configOptionValue(options, "model");
-      // Saved once agy has accepted them, so a rejected model or effort is not carried forward. The
-      // model is the one agy reports, so an effort set on agy's default is tied to that model.
+      // Saved once agy accepted them, with the model agy reports, so an effort set on agy's default
+      // is tied to that model.
       if (targetModel !== undefined || targetEffort !== undefined) rememberSettings(sessionId, { model: targetModel ?? servedModel, effort: targetEffort });
-      // What the agent reported in force as the prompt goes out — never the requested value
-      // standing in for a reply that did not confirm it.
+      // What agy reported in force, never the requested value.
       effectiveEffort = effortSettings(options);
       await client.setMode(sessionId, agyMode);
       if (client.cancelRequested) return cancelledInSetup;
@@ -510,28 +474,25 @@ export async function runDelegate({
       startHeartbeat();
       try {
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
-        // The caller gets the session id as the session opens, before the config calls above, so
-        // a cancel can land before there is a turn to cancel. Honoured here, the prompt never goes
-        // out; sent anyway, it ran in full under a "cancelled" reply.
+        // A cancel that lands while attachments are read: the prompt is not sent.
         if (client.cancelRequested) return cancelledInSetup;
-        // Raised with the prompt, so a frame that arrives while attachments are read is not folded in.
+        // Raised with the prompt, so frames sent while attachments were read are not folded in.
         promptInFlight = true;
         promptSent = true;
         const first = stampSettlement(client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]));
-        // Opened only once the prompt is on the wire (request writes synchronously): a steer
-        // accepted earlier went out first, and agy took the brief as a redirect of it.
+        // Opened once the prompt is on the wire (request writes synchronously): a steer sent first
+        // makes agy read the brief as a redirect of it.
         client.acceptSteers?.(true, mode === "ask" ? ASK_PREAMBLE : undefined);
         const settled = await first;
         let turn = settled.ok ? settled.value : undefined;
         let turnError = "error" in settled ? settled.error : undefined;
         let turnSeq = settled.seq;
         const replies = settled.ok ? [turn] : [];
-        // A steer settles the prompt before it at once with end_turn, so the turn ends only when
-        // the newest steer's reply does. Each pass re-checks for a background command, which a
-        // steered turn can leave running too.
+        // A steer settles the prompt before it at once with end_turn, so the turn ends with the
+        // newest steer's reply. Each pass re-checks for a background command.
         for (;;) {
-          // agy moves a command to the background with end_turn (measured); a refusal or an output
-          // cap that leaves a tool open is not waited on.
+          // Only end_turn leaves a backgrounded command (measured); a refusal or output cap is not
+          // waited on.
           if (turn?.stopReason === "end_turn" && !client.hasSteer?.() && state.backgroundToolCalls().length
             && await waitForBackground() === "cancelled") {
             return { ...turn, stopReason: "cancelled", replies };
@@ -545,12 +506,11 @@ export async function runDelegate({
             turnSeq = reply.seq;
             replies.push(turn);
           } else if (reply.seq < turnSeq) {
-            // Refused before the turn it was aimed at settled: that turn stands, and the caller,
-            // told "steered", learns here that agy refused it.
+            // Refused before its target settled: that turn stands, and the warning tells the caller.
             steerWarnings.push(`a steer was rejected by agy and did not redirect the turn: ${reply.error?.message || String(reply.error)}`);
           } else {
-            // Failed after taking the turn over (agy had already ended the prompt it redirected):
-            // the turn failed, as a prompt failing would — unless a steer queued behind it succeeds.
+            // Failed after taking the turn over: the turn failed, unless a steer queued behind it
+            // succeeds.
             turn = undefined;
             turnError = reply.error;
             turnSeq = reply.seq;
@@ -561,8 +521,7 @@ export async function runDelegate({
       } finally {
         // Closed in the same tick as the last check above, so no steer lands unread.
         client.acceptSteers?.(false);
-        // The result is assembled across awaits below, so without this a frame trailing the
-        // settled turn is still folded into it.
+        // Cleared before the awaits below, so a frame trailing the settled turn is not folded in.
         promptInFlight = false;
       }
     });
@@ -575,12 +534,11 @@ export async function runDelegate({
       : "none";
     const protocolWarnings = [];
     if (!finalMessageAvailable && state.activeToolCalls.size > 0) {
-      // Two measured cases (agy 1.5.14): a backgrounded command still running when the wait for it
-      // ran out, or an ask_question, which waits on the caller. The bridge stops agy when the
-      // delegation returns, so a backgrounded command stops with it.
+      // Measured cases (agy 1.5.14): a background command still running when the wait ran out, or an
+      // ask_question waiting on the caller.
       result = state.unfinishedToolText;
       resultSource = result ? "unfinished-tool" : "none";
-      // A refusal or output cap is not waited on, so a command can be open without a wait.
+      // A refusal or output cap is not waited on, so a command can be open with no wait.
       const cause = !state.backgroundToolCalls().length
         ? " agy is asking a question (ask_question), which a resume answers."
         : backgroundWaited !== undefined
@@ -607,8 +565,7 @@ export async function runDelegate({
       if (typeof res.stopReason !== "string") {
         protocolWarnings.push("stopReason dropped: ACP requires a string stop reason");
       } else if (res.stopReason !== "end_turn") {
-        // end_turn carries no signal. Surface a stop reason only when something happened: a
-        // refusal, a cancel, an output cap.
+        // end_turn is the normal case; only other stop reasons are surfaced.
         stopReason = res.stopReason;
       }
     }
@@ -616,25 +573,21 @@ export async function runDelegate({
       result,
       sessionId,
     };
-    // Absence means "nothing reported", not "nothing changed" — a claim this field cannot make,
-    // since shell-driven edits leave no diff event.
+    // Absent means nothing reported, not nothing changed: shell edits emit no diff.
     const filesReported = normalizeAgentReportedFiles([...state.touched], workspace);
     if (filesReported.length) out.filesReportedByEditTools = filesReported;
-    // resultSource is a caveat, not a fact: on the happy path result is just the answer. Emit it
-    // only when it warns. resumed likewise appears only when a resume took.
+    // resultSource appears only as a caveat; resumed only when a resume took.
     if (resultSource !== "post-tool" && resultSource !== "tool-free-stream") out.resultSource = resultSource;
     if (!!resumeSessionId && sessionId === resumeSessionId) out.resumed = true;
-    // Present when the session ran a different model than asked, and always when model was
-    // omitted: then it is the only place the caller sees which model agy used.
+    // Present when the served model differs from the requested one, so always when model was omitted.
     if (servedModel !== undefined && servedModel !== model) out.effectiveModel = servedModel;
     if (effectiveEffort !== undefined) out.effectiveEffort = effectiveEffort;
     if (stopReason !== undefined) out.stopReason = stopReason;
     const usage = readUsage((res?.replies ?? [res]).map((r) => r?.usage));
     if (usage) out.usage = usage;
     if (state.contextUsage) out.context = state.contextUsage;
-    // In plan mode agy's message points at the plan rather than containing it, so the plan
-    // artifact's content is the plan. Any other artifact is listed by path and summary; its
-    // content stays in the file.
+    // In plan mode agy's message points at the plan; the artifact's content is the plan. Other
+    // artifacts are listed by path and summary.
     const artifacts = [...state.artifacts.values()];
     const planArtifact = mode === "plan" ? artifacts.at(-1) : undefined;
     if (planArtifact) {
@@ -655,8 +608,7 @@ export async function runDelegate({
     if (protocolWarnings.length) out.protocolWarnings = protocolWarnings;
     return out;
   } catch (err) {
-    // A cancel before the prompt is the outcome the caller asked for, whether setup was cut short
-    // or a config call failed after it: there was no turn to fail.
+    // A caller's cancel before the prompt is a cancelled result, even if a config call then failed.
     if (cancelledInSetupByCaller && sessionId) {
       out = { result: "", sessionId, stopReason: "cancelled" };
       if (resumeSessionId && sessionId === resumeSessionId) out.resumed = true;
@@ -664,19 +616,16 @@ export async function runDelegate({
       return out;
     }
     failed = err;
-    // A JSON-RPC code means the agent rejected something rather than the bridge breaking — the
-    // distinction a caller needs to tell "fix your arguments" from "retry".
-    // -32000 is ACP's auth_required. agy sends it from session/new when no sign-in is stored.
+    // A JSON-RPC code means agy rejected something (fix the arguments), not that the bridge broke
+    // (retry). -32000 is ACP's auth_required, sent by agy from session/new when signed out.
     if (!err?.reason && err?.code === -32000) {
       err.reason = "not-signed-in";
       err.message += ". agy is not signed in: run agy once in a terminal and sign in, then retry.";
     }
     if (!err?.reason && typeof err?.code === "number") err.reason = "agent-error";
-    // A bare duration cannot distinguish a wedged agent from a slow command, so name what was
-    // outstanding — it also lets a retry resume the work already done.
+    // A bare duration cannot tell a wedged agent from a slow command, so name what was outstanding.
     const isTimeout = err?.reason === "hard-cap" || err?.reason === "idle-timeout";
-    // A handshake timeout gets the forensics but not the long-command advice: no prompt was sent,
-    // so no shell command explains the silence.
+    // A handshake timeout gets the forensics but not the long-command advice: no prompt was sent.
     const isStall = isTimeout || err?.reason === "handshake-timeout";
     if (isStall || err?.reason === "aborted" || err?.reason === "agent-exit") {
       const age = fmtDuration(supervisor.msSinceActivity());
@@ -685,24 +634,20 @@ export async function runDelegate({
       const files = normalizeAgentReportedFiles([...state.touched], workspace);
       if (files.length) err.message += ` Files reported edited: ${files.join(", ")}.`;
     }
-    // Every failure after the session opens leaves a live session, not just the stalls: the id is
-    // set before the config calls, so unknown-model and a rejected effort land here too.
+    // Any failure after the session opens leaves a live session, unknown-model and effort included.
     if (resumeError) {
-      // Without this the resume hint reads as "carry on from where you were", when the requested
-      // session was never resumed.
+      // Otherwise the resume hint reads as continuing work that was never in context.
       err.message += ` Note: resuming ${resumeSessionId} had already failed (${resumeError}),`
         + ` so this ran as a fresh session and none of that earlier work was in context.`;
     }
     if (sessionId) err.message += ` Resume with resumeSessionId ${sessionId}.`;
     if (isTimeout) {
-      // Name the knob that actually fired: raising the hard cap does nothing for an
-      // idle-timeout, whose ceiling is AGY_DELEGATE_IDLE_MS.
+      // Name the knob that fired: the hard cap does not govern an idle-timeout.
       const knob = err.reason === "idle-timeout" ? "AGY_DELEGATE_IDLE_MS" : "AGY_DELEGATE_HARD_CAP_MS";
       err.message += " agy does not stream shell output over ACP, so a long-running command emits"
         + ` nothing until it exits. Split the command, run it in the background and poll, or raise ${knob}.`;
     }
-    // Opt-in: the frames land in the caller's context and nothing there is actionable — the
-    // forensics above already carry that. Raw frames only help someone debugging the bridge.
+    // Opt-in: raw frames help only when debugging the bridge, and cost the caller context.
     const frames = transcriptFrames();
     if (frames > 0) {
       try {
@@ -712,19 +657,17 @@ export async function runDelegate({
     }
     throw err;
   } finally {
-    // The turn is decided from here on; what follows is agy's teardown. The server uses this to
-    // stop treating a cancel as one aimed at a running turn.
+    // The turn is decided; what follows is teardown. The server stops treating a cancel as aimed
+    // at a running turn.
     try { onTurnEnd?.(); } catch {}
     clearInterval(heartbeat);
     signal?.removeEventListener("abort", onAbort);
     client.off?.("cancel", onCancel);
     try { supervisor.finish(); } catch {}
-    // Awaited, so agy is gone when the caller gets the result: returned during agy's ~400 ms close,
-    // a delegation left a process with the workspace as its cwd, and deleting the workspace right
-    // after failed with EBUSY on Windows. The handle stays registered until then, so a force
-    // cancel or a shutdown in that window still reaches the agent and cuts the grace short.
-    // Graceful when the turn ran its course: agy closes the session and its conversation database.
-    // A stall, an abort or an exit gets the kill at once — a wedged agent would only burn the grace.
+    // Awaited, so agy has exited when the caller gets the result; otherwise agy still holds the
+    // workspace as its cwd (deleting it fails with EBUSY on Windows). The handle stays registered
+    // meanwhile, so force cancel and shutdown can cut the grace short. Graceful after a completed
+    // turn, so agy closes its conversation database; a stall, abort or exit is killed at once.
     const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
     // A host abort during the close is still an abort: a force stop ends the grace and kills.
     const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };

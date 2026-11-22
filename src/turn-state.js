@@ -1,8 +1,5 @@
-// Everything describing the turn in progress, in one object because it has to be wiped as one:
-// session/load replays the previous turn as ordinary update frames, so anything left behind
-// leaks into the next result. Fields are declared in exactly one place, freshFields(), which is
-// also what reset() applies — a field added there is reset for free, and one that is missed is a
-// silent stale-data bug on resume.
+// Everything describing the turn in progress, reset as one before the prompt. freshFields() is the
+// single declaration reset() applies, so a field added there is reset too.
 
 const isTerminalToolStatus = (status) =>
   status === "completed" || status === "failed" || status === "cancelled";
@@ -46,36 +43,27 @@ function progressStream(prefix, onProgress, throttleMs) {
 function freshFields() {
   return {
     resultChunks: [],
-    // Text superseded by a later tool call is normally a preamble ("Inspecting the
-    // implementation."), but the rule cannot tell a preamble from the whole answer: an agent
-    // that replies and then runs one more command has its entire reply discarded, leaving the
-    // caller "" with stopReason end_turn and no error. Kept so it can be handed back when
-    // nothing survived — labelled, never blended with a real final message.
+    // Text a later tool call superseded: usually a preamble, but it can be the whole answer when
+    // agy replies and then runs one more command. Handed back, labelled, only when nothing else is.
     discardedResult: "",
-    // Message text sent while a tool call was still running, since that call started. Not part of
-    // the result: it is handed back only when the turn ends with the call still unfinished, which
-    // is how agy reports moving a long shell command to the background.
+    // Message text sent since a still-running tool call started; handed back only when the turn
+    // ends with the call unfinished (a backgrounded command or ask_question).
     unfinishedToolText: "",
     sawToolCall: false,
     collectingPostToolResult: false,
     activeToolCalls: new Set(),
-    // Tool name per call id (agy's `name`, else its title), so an unfinished ask_question, which
-    // waits on the caller, can be told from a backgrounded command, which finishes by itself.
+    // Tool name per call id, to tell an ask_question (waits on the caller) from a backgrounded
+    // command (finishes by itself).
     toolNames: new Map(),
-    // Set by a usage_update and cleared by any other frame: agy closes a turn, prompted or not,
-    // with a usage_update after its last message.
+    // Set by a usage_update, cleared by any other frame: agy closes every turn with one.
     usageAfterActivity: false,
-    // The newest usage_update's { used, size }: the conversation's context in tokens and the
-    // model's window. Unlike the prompt reply's usage it covers a background continuation too.
+    // The newest usage_update's { used, size }; unlike the reply's usage it covers a continuation.
     contextUsage: undefined,
     lastFrameAt: 0,
-    // Ids observed terminal, so a stale non-terminal re-send for one is recognized and dropped
-    // instead of restarting collection — which would demote an already-collected final message
-    // to discardedResult and mislabel it pre-tool-fallback.
+    // Ids seen terminal, so a stale non-terminal re-send cannot discard a collected final message.
     finishedToolCalls: new Set(),
-    // agy writes its plan as an artifact: a write_file call carrying ArtifactMetadata, saved
-    // under ~/.gemini/antigravity-cli/brain/<sessionId>/. Keyed by path, so a rewrite of the
-    // same artifact replaces the earlier entry.
+    // agy's artifacts (the plan): write_file calls carrying ArtifactMetadata, under
+    // ~/.gemini/antigravity-cli/brain/<sessionId>/. Keyed by path, so a rewrite replaces.
     artifacts: new Map(),
     touched: new Set(),
     lastToolLabel: null,
@@ -107,8 +95,7 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
       state.resultChunks.length = 0;
     },
 
-    // The stream is the model's own message, bounded by its output limit; a byte cap
-    // here would hand back a partial answer as if it were the whole one.
+    // Uncapped: a cap would return a partial answer as the whole one.
     appendResult(text) {
       state.resultChunks.push(text);
     },
@@ -141,8 +128,8 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
           state.finishedToolCalls.add(toolCallId);
         }
         if (state.activeToolCalls.size === 0 && !state.collectingPostToolResult) {
-          // Discard any message text emitted while tools were still running.
-          // A duplicate or late terminal update must not wipe an already-collected final message.
+          // Drop text sent while tools ran; the guard above keeps a late duplicate from wiping a
+          // collected final message.
           state.resetResult();
           state.collectingPostToolResult = true;
         }

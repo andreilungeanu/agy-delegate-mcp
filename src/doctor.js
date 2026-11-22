@@ -31,9 +31,7 @@ function envReport(name, fallback = null) {
   return process.env[name] !== undefined ? process.env[name] : fallback;
 }
 
-// Time-boxed because a launcher that accepts --version and then never answers would hang doctor
-// forever — and doctor is what you run when delegation is already broken, so a wedged agent is
-// exactly the case it must survive. Same guard the deep handshake has.
+// Time-boxed: doctor runs when delegation is already broken, so it must survive a wedged launcher.
 export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, signal) {
   const { command, options } = spawnSpec;
   const launcher = String(command || "").replace(/^["']|["']$/g, "");
@@ -56,14 +54,11 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     };
     const [file, argv] = spawnCommandLine(execCommand, execArgs, options);
     const child = spawn(file, argv, { ...options, detached: DETACHED, stdio: ["ignore", "pipe", "pipe"] });
-    // Capped: a version string is a line, and a launcher that streams instead should not be
-    // accumulated whole while the probe waits out its timeout.
+    // Capped: a version is one line.
     child.stdout?.on("data", (chunk) => {
       if (stdout.length < PROBE_STDOUT_CAP) stdout += chunk.toString();
     });
-    // Drained, not merely piped. An unread pipe fills, the launcher blocks writing to it and so
-    // never exits, and the probe can only report that as a timeout — a healthy but noisy
-    // launcher reads out identically to a wedged one. Nothing consumes the bytes.
+    // Drained: a full pipe blocks a noisy launcher, which would then read as a timeout.
     child.stderr?.on("data", () => {});
     child.stderr?.on("error", () => {});
     child.on("error", () => finish({ found: false, version: null }));
@@ -76,11 +71,9 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       });
     });
     timer = setTimeout(() => {
-      // treeKill, not child.kill: the spawn spec carries shell:true on win32, where a plain
-      // kill only reaches the wrapper and leaves the launcher running.
+      // treeKill: on win32 a plain kill reaches only the shell wrapper.
       if (child.pid) treeKill(child.pid).catch(() => {});
-      // The launcher exists — it spawned — it just never answered, which is a different
-      // diagnosis from "not installed" and has to read that way.
+      // It spawned, so it is installed; it did not answer.
       finish({ found: true, version: null, error: `version probe timed out after ${timeoutMs}ms` });
     }, timeoutMs);
     timer.unref?.();
@@ -97,7 +90,7 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
 async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs, signal, onClientReady }) {
   const workspaceDir = workspace || process.cwd();
   const client = clientFactory({ spawnSpec, cwd: workspaceDir });
-  // Handed out before the spawn, as delegate does, so a server shutdown can stop it.
+  // Handed out before the spawn, so shutdown can stop it.
   onClientReady?.(client);
   let timer;
   let onAbort;
@@ -109,9 +102,8 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
       await client.newSession(workspaceDir);
       details.protocolVersion = client.protocolVersion ?? null;
       details.agentCapabilities = client.agentCapabilities ?? {};
-      // The ids delegate's model accepts: the model config option's values, base ids such as
-      // gemini-4-neon. availableModels repeats each with a level suffix, which delegate does not
-      // take, so it is the fallback only for an agent that reports no model option.
+      // The base ids delegate accepts, from the model option. availableModels carries level
+      // suffixes delegate does not take, so it is only the fallback.
       const modelOption = (client.configOptions ?? []).find((o) => o?.id === "model");
       const baseIds = allowedValues(modelOption);
       details.models = baseIds.length
@@ -120,17 +112,13 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
       details.currentModel = (typeof modelOption?.currentValue === "string" ? modelOption.currentValue : null)
         ?? client.sessionModels?.currentModelId ?? null;
       details.modes = (client.sessionModes?.availableModes ?? []).map((m) => m?.id).filter(Boolean);
-      // session/new already returned these. currentModel only — any other model needs a model
-      // switch first, which this handshake does not send. name and category are what tell an
-      // effort option apart when its id is unfamiliar; currentValue is the level in force.
+      // The current model's options only: another model's need a model switch first.
       details.currentModelOptions = describeOptions(client.configOptions);
-      // The plan the signed-in account is on, as agy reports it.
       details.tier = client.sessionMeta?.antigravity?.tier ?? null;
     })();
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        // Not awaited, so the timeout still rejects at its stated deadline rather than at the
-        // deadline plus teardown. The finally below awaits the same idempotent promise.
+        // Not awaited, so the timeout rejects on time; the finally awaits the same stop.
         try { Promise.resolve(client.stop()).catch(() => {}); } catch {}
         reject(new Error(`Handshake timed out after ${timeoutMs}ms`));
       }, timeoutMs);
@@ -150,11 +138,9 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
     return { ok: false, error: err?.message || String(err) };
   } finally {
     clearTimeout(timer);
-    // Awaited so doctor does not return while the agent it spawned is still being torn down.
-    // A killed child exits in milliseconds; only one that ignores the kill costs the full bound.
-    // Graceful, so the session the handshake opened is closed; a timed-out handshake already
-    // started the kill above, and stop() joins it.
-    // The abort listener stays on through the close, so an abort there forces the kill.
+    // Awaited, so doctor returns after its agent has exited. Graceful, closing the handshake's
+    // session; after a timeout or abort it joins the kill already started. The abort listener stays
+    // on through the close, so an abort there forces the kill.
     try { await Promise.resolve(client.stop({ graceMs: signal?.aborted ? 0 : GRACEFUL_STOP_MS })); } catch {}
     if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
@@ -223,7 +209,7 @@ export async function runDoctor({
   };
 
   if (deep && signal?.aborted) {
-    // Interrupted already: no agent is started for a result nobody reads.
+    // Already interrupted: no agent is started.
     out.agent.handshake = { ok: false, error: "Handshake aborted by MCP host" };
   } else if (deep) {
     out.agent.handshake = await runDeepHandshake({
