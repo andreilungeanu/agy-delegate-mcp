@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient } from "../src/acp-client.js";
-import { runDelegate as rawRunDelegate } from "../src/delegate.js";
+import { runDelegate as rawRunDelegate, readUsage } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
@@ -1858,4 +1858,16 @@ test("an agent that exits during the background wait ends the wait too", async (
   const atFailure = reads;
   await new Promise((r) => setTimeout(r, 400));
   assert.ok(reads - atFailure <= 1, `the wait polled ${reads - atFailure} more times after the delegation failed`);
+});
+
+// Summed per field over whichever replies had it, a field one reply left out was a partial sum
+// presented as the turn's. A reply with no usage at all (a prompt a steer settled before any
+// model call finished, measured) counts nothing and does not thin out the fields.
+test("summed usage keeps only fields every reply with usage reported", () => {
+  assert.deepEqual(
+    readUsage([{ inputTokens: 5, totalTokens: 5 }, undefined, { inputTokens: 7 }]),
+    { scope: "turn", inputTokens: 12 },
+  );
+  assert.deepEqual(readUsage([{ inputTokens: 5, totalTokens: 5 }, {}]), { scope: "turn", inputTokens: 5, totalTokens: 5 });
+  assert.equal(readUsage([undefined]), undefined);
 });

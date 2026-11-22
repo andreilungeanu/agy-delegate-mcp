@@ -188,13 +188,13 @@ const isTokenCount = (v) => Number.isFinite(v) && v >= 0;
 // fields ACP names, and only numbers, so an agent's extra keys stay out of the result. A steered
 // turn has one reply per prompt, each covering its own part, so they are summed.
 const USAGE_FIELDS = ["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens", "totalTokens"];
-function readUsage(raws) {
-  const sums = {};
-  for (const raw of raws) {
-    if (!raw || typeof raw !== "object") continue;
-    for (const k of USAGE_FIELDS) if (isTokenCount(raw[k])) sums[k] = (sums[k] ?? 0) + raw[k];
-  }
-  return Object.keys(sums).length ? { scope: "turn", ...sums } : undefined;
+export function readUsage(raws) {
+  const reported = raws.filter((raw) => raw && typeof raw === "object" && USAGE_FIELDS.some((k) => isTokenCount(raw[k])));
+  // A field counts only when every reply that reported usage carried it; summed from some of them
+  // it would understate the turn.
+  const fields = USAGE_FIELDS.filter((k) => reported.length && reported.every((raw) => isTokenCount(raw[k])));
+  if (!fields.length) return undefined;
+  return { scope: "turn", ...Object.fromEntries(fields.map((k) => [k, reported.reduce((sum, raw) => sum + raw[k], 0)])) };
 }
 
 function modelOption(configOptions) {
