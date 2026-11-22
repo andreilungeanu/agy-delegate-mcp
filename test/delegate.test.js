@@ -2034,3 +2034,23 @@ test("context ignores a usage_update addressed to another session", async () => 
   });
   assert.deepEqual(out.context, { used: 10, size: 100 });
 });
+
+// stop() reports whether it saw the agent exit. Ignored, a surviving agent went unmentioned and,
+// with the handle dropped, unreachable through cancel.
+test("an agent that does not exit after the stop is retried and reported", async () => {
+  let stops = 0;
+  const out = await runDelegate({
+    spec: "task", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient("sess-stuck");
+      client.prompt = async () => {
+        client.emit("update", { update: msgChunk("ok") });
+        return { stopReason: "end_turn" };
+      };
+      client.stop = async () => { stops++; return false; };
+      return client;
+    },
+  });
+  assert.equal(stops, 2, "the stop must be retried once as a kill");
+  assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
+});

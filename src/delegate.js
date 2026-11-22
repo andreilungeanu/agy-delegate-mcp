@@ -436,6 +436,8 @@ export async function runDelegate({
   let sessionId;
   let resumeError;
   let failed;
+  /** @type {any} */
+  let out;
   let servedModel;
   let effectiveEffort;
   const contextWarnings = [];
@@ -568,7 +570,7 @@ export async function runDelegate({
         stopReason = res.stopReason;
       }
     }
-    const out = {
+    out = {
       result,
       sessionId,
     };
@@ -676,7 +678,19 @@ export async function runDelegate({
     // A host abort during the close is still an abort: a force stop ends the grace and kills.
     const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };
     signal?.addEventListener("abort", abortClose, { once: true });
-    try { await client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS }); } catch {}
+    let exited = false;
+    try {
+      exited = await client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS });
+      // A stop that did not see the exit is not memoized, so a second one dispatches a fresh kill.
+      if (exited === false) exited = await client.stop();
+    } catch {}
     finally { signal?.removeEventListener("abort", abortClose); }
+    if (exited === false) {
+      const pid = client.child?.pid;
+      const note = `the bridge stopped agy${pid ? ` (pid ${pid})` : ""} but did not see agy exit; it may still be running.`;
+      // The result or the error is already decided; the note rides on whichever is going out.
+      if (failed) failed.message += ` Note: ${note}`;
+      else if (out) (out.protocolWarnings ??= []).push(note);
+    }
   }
 }
