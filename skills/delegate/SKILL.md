@@ -127,12 +127,10 @@ full brief. `protocolWarnings` says why the resume fell back.
 
 ## Clarifying questions
 
-When agy needs a decision it asks and ends the turn: the question is in `result`, with
-`resultSource: "unfinished-tool"` when agy asked through its question tool. Read the question in `result` and
-continue by resuming the **same session** with a free-text answer in `spec` — you are not
-limited to any options agy listed. If agy asked with no prose, `result` is empty
-(`resultSource: "none"`) and `protocolWarnings` says agy is asking a question: resume and ask it
-to state the question.
+When agy needs a decision it asks and ends the turn. A question asked through agy's question tool
+arrives in `questions`, with its options and agy's recommended one; a question asked in prose
+only is in `result`. Answer by resuming the **same session** with a free-text answer in `spec` —
+you are not limited to the options agy listed.
 
 ## Security
 
