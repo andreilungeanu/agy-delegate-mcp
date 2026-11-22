@@ -189,7 +189,8 @@ export class AcpClient extends EventEmitter {
   takeSteer() { return this._steers.shift(); }
   // Recorded so a delegation waiting on a backgrounded command can stop waiting: after a cancel
   // agy closes the call without the usage_update that ends a continuation.
-  cancel(sessionId) { this.cancelRequested = true; this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }
+  // A cancel also closes the steer window: a steer accepted after it restarted the cancelled turn.
+  cancel(sessionId) { this.cancelRequested = true; this._steerable = false; this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 

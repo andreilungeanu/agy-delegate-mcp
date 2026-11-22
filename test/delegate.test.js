@@ -1778,3 +1778,23 @@ test("a steer cannot reach agy before the task prompt", async () => {
   assert.equal(prompts[0].params.prompt[0].text, "STEERABLE task", "the brief must be the first prompt agy sees");
   assert.equal(prompts.length, 2);
 });
+
+test("a steer after a cancel is refused, so the cancelled turn stays cancelled", async () => {
+  let client;
+  let steerAfterCancel;
+  const out = await runDelegate({
+    spec: "STEERABLE task", workspace: process.cwd(),
+    clientFactory: () => (client = fakeFactory()),
+    onSessionReady: (sid) => {
+      const poll = () => {
+        if (!client._steerable) return setTimeout(poll, 5);
+        client.cancel(sid);
+        steerAfterCancel = client.steer(sid, "go left");
+      };
+      poll();
+    },
+  });
+  assert.equal(steerAfterCancel, false);
+  assert.equal(out.stopReason, "cancelled");
+  assert.doesNotMatch(out.result, /STEERED/);
+});
