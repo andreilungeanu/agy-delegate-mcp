@@ -1277,3 +1277,46 @@ test("force cancel cuts the close of a turn that settles at once, while another 
     await client.close();
   }
 });
+
+// A closed terminal can deliver the stdin EOF before its SIGHUP. That one signal is not a second
+// request and must not cut the wait short; only a second signal is.
+test("a SIGHUP after the stdin EOF still waits for the kills", { skip: process.platform === "win32" }, async () => {
+  const exited = [];
+  let settle;
+  const stopped = new Promise((r) => { settle = r; });
+  const map = new Map([["sess-1", new Set([{ client: { stop: () => stopped } }])]]);
+  const stdin = new EventEmitter();
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin });
+    stdin.emit("end");
+    process.emit("SIGHUP");
+    await flushExit();
+    assert.deepEqual(exited, [], "one signal must wait for the kill");
+    process.emit("SIGTERM");
+    assert.deepEqual(exited, [143], "a second signal exits at once");
+    settle(true);
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+  }
+});
+
+// stop() resolving false means it did not see the agent exit. Shutdown left on it, while the
+// delegation's own retry of the kill was still pending.
+test("shutdown retries a stop that did not see the agent exit before leaving", async () => {
+  const exited = [];
+  const calls = [];
+  const map = new Map([["sess-1", new Set([{ client: { stop: () => { calls.push(Date.now()); return Promise.resolve(calls.length > 1); } } }])]]);
+  const stdin = new EventEmitter();
+  installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin });
+  stdin.emit("end");
+  await flushExit();
+  await flushExit();
+  assert.equal(calls.length, 2, "the stop must be retried once");
+  assert.deepEqual(exited, [0]);
+});

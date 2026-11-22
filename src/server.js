@@ -459,19 +459,24 @@ export function installSignalCleanup(map, {
   stdin = process.stdin,
 } = {}) {
   let shuttingDown = false;
+  let signalsSeen = 0;
   const shutdown = (code, fromSignal = false) => {
     // A second signal skips the wait below: the kills are already dispatched, and a caller that
-    // has asked twice wants out now. A stdin EOF is not a second ask: a hangup closes stdin
-    // right after its SIGHUP.
-    if (shuttingDown) return fromSignal ? exit(code) : undefined;
+    // has asked twice wants out now. A stdin EOF is not an ask of its own: a hangup closes stdin
+    // and sends SIGHUP, in either order.
+    if (fromSignal) signalsSeen++;
+    if (shuttingDown) return signalsSeen >= 2 ? exit(code) : undefined;
     shuttingDown = true;
     // Set in the handler, not left to the exit below: a loop that runs dry on its own still
     // has to die with the code the signal asked for, and the scheduled exit may never get a
     // turn to run.
     setExitCode(code);
     const stops = [];
+    // A stop that did not see the exit is retried once, as the delegation itself does; leaving on
+    // the first would exit with that retry still pending.
+    const stopOnce = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
     const dispatch = (handle) => {
-      try { stops.push(Promise.resolve(handle.client.stop()).catch(() => {})); } catch {}
+      try { stops.push(stopOnce(handle).then((exited) => (exited === false ? stopOnce(handle) : exited))); } catch {}
     };
     for (const handles of map.values()) for (const handle of handles) dispatch(handle);
     // Delegations still inside their handshake. The agent is already running for these, and this
