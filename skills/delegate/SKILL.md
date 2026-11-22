@@ -96,8 +96,8 @@ vars, read [reference.md](reference.md) in this skill directory.
 | Parameter   | Default                |
 | ----------- | ---------------------- |
 | `mode`      | `agent`                |
-| `model`     | agy's default model    |
-| `effort`    | agy's level for it     |
+| `model`     | agy's default model; on resume, the model this server last set on the session |
+| `effort`    | agy's level for it; on resume, the effort last set, unless `model` changes |
 | `workspace` | required               |
 
 

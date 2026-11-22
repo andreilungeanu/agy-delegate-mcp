@@ -160,7 +160,7 @@ export const delegateInputSchema = z.object({
   mode: z.enum(["agent", "plan", "ask"]).default("agent").describe("agent implements; plan writes a plan, returned as plan; ask answers. plan and ask are instructions to the agent, not limits."),
   resumeSessionId: z.string().trim().optional().describe("Continue an existing agy session."),
   workspace: z.string().trim().min(1, "workspace must not be blank").describe("The agent's working directory, not a limit. Smallest directory holding the task's files; with no such directory the project root is the floor. Must already exist; never create one for the call."),
-  model: z.string().trim().min(1, "model must be a non-empty string").optional().describe("agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, agy's default runs and effectiveModel names it. doctor deep:true lists every id."),
+  model: z.string().trim().min(1, "model must be a non-empty string").optional().describe("agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, agy's default runs (a resume keeps the model last set on the session) and effectiveModel names it. doctor deep:true lists every id."),
   // Which values a model offers is only knowable after selecting it, so this stays an open
   // string and the bridge validates the exact token against the live option list.
   effort: z.string().trim().min(1).optional().describe("agy thinking level for the selected model (low, medium, high, xhigh). Levels differ per model; invalid values fail before the prompt and name the accepted set. Pass only when the user asks for agy effort — the host's own reasoning setting is unrelated."),

@@ -22,7 +22,9 @@ Every tool returns its payload as one compact JSON text block and declares no MC
 `outputSchema`. Declaring one obliges the server to send the same object again as
 `structuredContent`, and hosts that read both fields put both copies into the model's context.
 The `cancel` and `steer` status vocabularies are published in their tool descriptions instead.
-A failed `delegate` returns `isError: true` with plain text: `delegate failed [<reason>]: <message>`.
+A failed `delegate` returns `isError: true` with plain text: `delegate failed [<reason>]: <message>`
+(the bracket is absent when no reason was assigned). Invalid arguments are rejected by the MCP SDK
+before the tool runs.
 
 ### Other tools
 
@@ -74,8 +76,8 @@ diagnostic, not fail the call.
   to `plan`. `ask` also prefixes the prompt with an answer-only instruction; agy has no ask mode.
 - **Resume**: `session/resume`, which restores the conversation without replaying it. agy opens a
   resumed session at its default model, thinking level and mode, so all three are compared and
-  re-sent; a `model` or `effort` the caller leaves out is taken from what this process last set on
-  the session. agy answers an unknown id and a failed read with the same `-32603`; the bridge checks
+  re-sent; a `model` the caller leaves out is taken from what this process last set on the session,
+  and an omitted `effort` likewise unless `model` changes. agy answers an unknown id and a failed read with the same `-32603`; the bridge checks
   `session/list` (every session the account has, one page) and starts fresh only for an id agy
   does not list.
 - **Plan**: in plan mode agy writes the plan with a `write_file` call carrying `ArtifactMetadata`,
