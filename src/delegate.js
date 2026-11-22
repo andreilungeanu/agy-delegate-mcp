@@ -405,9 +405,12 @@ export async function runDelegate({
   // turn unprompted, closing with a usage_update (measured, agy 1.5.14). Stopping agy at end_turn
   // killed the command, so wait for that continuation instead. The hard cap still bounds it.
   let backgroundWaited;
+  // One clock for the delegation: a steered turn that leaves the command running resumes the wait
+  // rather than starting a fresh one.
+  let backgroundStartedAt;
   const waitForBackground = async () => {
     try { onProgress?.(`waiting for agy's background command: ${state.lastToolLabel ?? "tool"}`.slice(0, 200)); } catch {}
-    const startedAt = Date.now();
+    const startedAt = (backgroundStartedAt ??= Date.now());
     for (;;) {
       await new Promise((r) => setTimeout(r, Math.min(250, backgroundSettleMs)));
       backgroundWaited = Date.now() - startedAt;
@@ -483,7 +486,10 @@ export async function runDelegate({
         // the newest steer's reply does. Each pass re-checks for a background command, which a
         // steered turn can leave running too.
         for (;;) {
-          if (turn && !client.hasSteer?.() && state.backgroundToolCalls().length && await waitForBackground() === "cancelled") {
+          // agy moves a command to the background with end_turn (measured); a refusal or an output
+          // cap that leaves a tool open is not waited on.
+          if (turn?.stopReason === "end_turn" && !client.hasSteer?.() && state.backgroundToolCalls().length
+            && await waitForBackground() === "cancelled") {
             return { ...turn, stopReason: "cancelled", replies };
           }
           const steer = client.takeSteer?.();

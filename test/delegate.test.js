@@ -1958,3 +1958,53 @@ test("a first prompt that fails while a steer is queued returns the steered turn
   await steered;
   assert.equal(out.result, "STEERED after failure");
 });
+
+// agy moves a command to the background with end_turn (measured). A refusal or an output cap
+// that leaves a tool open is no such case, and waited up to AGY_DELEGATE_BACKGROUND_WAIT_MS.
+test("only an end_turn with a tool still running waits for a background command", async () => {
+  const started = Date.now();
+  const out = await runDelegate({
+    spec: "run it", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient("sess-refusal");
+      client.prompt = async () => {
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", title: "npm test", status: "in_progress" } });
+        return { stopReason: "refusal" };
+      };
+      return client;
+    },
+    backgroundWaitMs: 5000, backgroundSettleMs: 20, backgroundContinueMs: 5000,
+  });
+  assert.ok(Date.now() - started < 1000, `a refusal waited ${Date.now() - started} ms`);
+  assert.equal(out.stopReason, "refusal");
+});
+
+// One bound for the delegation: a steered turn that leaves the command running resumed the wait
+// with a fresh clock.
+test("the background wait keeps one clock across a steered turn", async () => {
+  const started = Date.now();
+  let clientRef;
+  await runDelegate({
+    spec: "run it", mode: "agent", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = backgroundFactory({})();
+      let open = false;
+      const steers = [];
+      client.acceptSteers = (on) => { open = on; };
+      client.hasSteer = () => steers.length > 0;
+      client.takeSteer = () => steers.shift();
+      client.steer = () => {
+        if (!open) return "not-ready";
+        // Accepted, and the command keeps running: agy ends the redirected turn with it open.
+        steers.push(stampSettlement(Promise.resolve({ stopReason: "end_turn" })));
+        return "steered";
+      };
+      clientRef = client;
+      return client;
+    },
+    onSessionReady: () => { setTimeout(() => clientRef.steer("sess-bg", "keep going"), 400); },
+    backgroundWaitMs: 700, backgroundSettleMs: 20, backgroundContinueMs: 10000,
+  });
+  const took = Date.now() - started;
+  assert.ok(took < 1000, `the wait ran ${took} ms against a 700 ms bound`);
+});
