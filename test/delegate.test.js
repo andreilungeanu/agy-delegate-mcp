@@ -2152,3 +2152,37 @@ test("a resume naming the model an earlier effort-only call ran on keeps that ef
   const named = await run({ model: first.effectiveModel ?? "gemini-4-neon" });
   assert.deepEqual(named.effectiveEffort, { thought_level: "xhigh" });
 });
+
+// The pre-prompt cancel was checked only once setup reached the prompt, so a config call that
+// hung held the cancelled delegation to the handshake timeout.
+test("a cancel during setup ends a delegation whose config call hangs", async () => {
+  let client;
+  const started = Date.now();
+  const out = await runDelegate({
+    spec: "do the thing", workspace: process.cwd(), handshakeMs: 10000,
+    clientFactory: () => {
+      client = fakeFactory();
+      client.setMode = () => new Promise(() => {});
+      return client;
+    },
+    onSessionReady: (sid) => { setTimeout(() => client.cancel(sid), 50); },
+  });
+  assert.ok(Date.now() - started < 3000, `the cancelled setup took ${Date.now() - started} ms`);
+  assert.equal(out.stopReason, "cancelled");
+});
+
+test("a config call agy rejects after a cancel reports the delegation cancelled", async () => {
+  let client;
+  const out = await runDelegate({
+    spec: "do the thing", workspace: process.cwd(),
+    clientFactory: () => {
+      client = fakeFactory();
+      client.setMode = async (sid) => {
+        client.cancel(sid);
+        throw Object.assign(new Error("Internal error: cancelled"), { code: -32603 });
+      };
+      return client;
+    },
+  });
+  assert.equal(out.stopReason, "cancelled");
+});

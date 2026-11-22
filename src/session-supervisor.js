@@ -101,6 +101,11 @@ export class SessionSupervisor {
     this._trip("aborted", "delegation aborted by MCP host");
   }
 
+  // A cancel before the prompt: nothing is running to wait for, so setup stops at once.
+  cancelSetup() {
+    this._trip("cancelled-in-setup", "cancelled before the prompt was sent");
+  }
+
   _trip(reason, message) {
     if (this._settled) return;
     this._settled = true;

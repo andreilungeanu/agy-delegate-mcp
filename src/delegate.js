@@ -320,6 +320,17 @@ export async function runDelegate({
   const supervisor = new SessionSupervisor(client, { idleMs: turnIdleMs, handshakeMs: shakeMs, hardCapMs: capMs });
   const onAbort = () => supervisor.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
+  // A cancel before the prompt ends setup at once; setup checks cancelRequested between its calls.
+  let promptSent = false;
+  // The caller's cancel only: a supervisor trip (a deadline, an abort) cancels after settling.
+  let cancelledInSetupByCaller = false;
+  const onCancel = () => {
+    if (promptSent || supervisor.settled) return;
+    cancelledInSetupByCaller = true;
+    supervisor.cancelSetup();
+  };
+  client.on?.("cancel", onCancel);
+  const cancelledInSetup = { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
 
   // The bridge cannot see inside a running shell command, so a long silence is reported
   // rather than acted on: the caller gets elapsed time and frame age and can decide.
@@ -467,6 +478,7 @@ export async function runDelegate({
       // reproduced on 1.5.13), so model, effort and mode are compared and re-sent every time
       // rather than assumed to have carried over.
       let options = client.configOptions;
+      if (client.cancelRequested) return cancelledInSetup;
       // Only a resume that took inherits: a fallback to a fresh session is a different session.
       const earlier = resumeSessionId && sessionId === resumeSessionId ? sessionSettings.get(sessionId) : undefined;
       const targetModel = model ?? earlier?.model;
@@ -478,10 +490,12 @@ export async function runDelegate({
           options = optionsFrom(await client.setConfigOption(sessionId, "model", targetModel));
         }
       }
+      if (client.cancelRequested) return cancelledInSetup;
       if (targetEffort !== undefined) {
         const target = targetModel ?? configOptionValue(options, "model") ?? "the session's model";
         options = optionsFrom(await applyEffort(client, sessionId, target, targetEffort, options));
       }
+      if (client.cancelRequested) return cancelledInSetup;
       servedModel = configOptionValue(options, "model");
       // Saved once agy has accepted them, so a rejected model or effort is not carried forward. The
       // model is the one agy reports, so an effort set on agy's default is tied to that model.
@@ -490,6 +504,7 @@ export async function runDelegate({
       // standing in for a reply that did not confirm it.
       effectiveEffort = effortSettings(options);
       await client.setMode(sessionId, agyMode);
+      if (client.cancelRequested) return cancelledInSetup;
       state.reset();
       supervisor.promptStarted();
       startHeartbeat();
@@ -498,9 +513,10 @@ export async function runDelegate({
         // The caller gets the session id as the session opens, before the config calls above, so
         // a cancel can land before there is a turn to cancel. Honoured here, the prompt never goes
         // out; sent anyway, it ran in full under a "cancelled" reply.
-        if (client.cancelRequested) return { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
+        if (client.cancelRequested) return cancelledInSetup;
         // Raised with the prompt, so a frame that arrives while attachments are read is not folded in.
         promptInFlight = true;
+        promptSent = true;
         const first = stampSettlement(client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]));
         // Opened only once the prompt is on the wire (request writes synchronously): a steer
         // accepted earlier went out first, and agy took the brief as a redirect of it.
@@ -639,6 +655,14 @@ export async function runDelegate({
     if (protocolWarnings.length) out.protocolWarnings = protocolWarnings;
     return out;
   } catch (err) {
+    // A cancel before the prompt is the outcome the caller asked for, whether setup was cut short
+    // or a config call failed after it: there was no turn to fail.
+    if (cancelledInSetupByCaller && sessionId) {
+      out = { result: "", sessionId, stopReason: "cancelled" };
+      if (resumeSessionId && sessionId === resumeSessionId) out.resumed = true;
+      if (resumeError) out.protocolWarnings = [`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`];
+      return out;
+    }
     failed = err;
     // A JSON-RPC code means the agent rejected something rather than the bridge breaking — the
     // distinction a caller needs to tell "fix your arguments" from "retry".
@@ -693,6 +717,7 @@ export async function runDelegate({
     try { onTurnEnd?.(); } catch {}
     clearInterval(heartbeat);
     signal?.removeEventListener("abort", onAbort);
+    client.off?.("cancel", onCancel);
     try { supervisor.finish(); } catch {}
     // Awaited, so agy is gone when the caller gets the result: returned during agy's ~400 ms close,
     // a delegation left a process with the workspace as its cwd, and deleting the workspace right

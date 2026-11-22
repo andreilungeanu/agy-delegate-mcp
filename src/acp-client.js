@@ -216,7 +216,13 @@ export class AcpClient extends EventEmitter {
   // Recorded so a delegation waiting on a backgrounded command can stop waiting: after a cancel
   // agy closes the call without the usage_update that ends a continuation.
   // A cancel also closes the steer window: a steer accepted after it restarted the cancelled turn.
-  cancel(sessionId) { this.cancelRequested = true; this._steerWindow = "closed"; this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }
+  cancel(sessionId) {
+    this.cancelRequested = true;
+    this._steerWindow = "closed";
+    this.peer.notify("session/cancel", { sessionId });
+    this.emit("cancel");
+    return Promise.resolve();
+  }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 
