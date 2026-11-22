@@ -419,3 +419,45 @@ test("runDoctor deep stops the agent at once when the host aborts", async () => 
   assert.equal(readied, client, "the agent must be handed out so shutdown can reach it");
   assert.ok(!isChildAlive(client.child));
 });
+
+// The version probe ran without the signal: an abort during a hung --version waited out the probe's
+// timeout and then started the deep handshake anyway.
+test("runDoctor stops a hung version probe on abort and starts no handshake after it", async () => {
+  const controller = new AbortController();
+  let factoryCalls = 0;
+  const started = Date.now();
+  setTimeout(() => controller.abort(), 200);
+  const out = await rawRunDoctor({
+    deep: true, signal: controller.signal, versionTimeoutMs: 10000,
+    spawnSpec: { command: fileURLToPath(new URL("./fixtures/version-hang-stub.js", import.meta.url)), args: [], options: { shell: false } },
+    clientFactory: () => { factoryCalls++; throw new Error("no handshake expected"); },
+  });
+  assert.ok(Date.now() - started < 3000, `doctor took ${Date.now() - started} ms after the abort`);
+  assert.equal(factoryCalls, 0, "no handshake may start after the abort");
+  assert.match(out.agent.handshake?.error ?? "", /aborted/);
+});
+
+// The abort listener came off before the graceful close, so an abort during a wedged close ran out
+// the whole grace.
+test("runDoctor cuts a wedged graceful close short when the host aborts during it", async () => {
+  const controller = new AbortController();
+  let abortedAt;
+  await rawRunDoctor({
+    deep: true, signal: controller.signal,
+    spawnSpec: { command: process.execPath, args: ["--version"], options: { shell: false } },
+    clientFactory: (opts) => {
+      const client = new AcpClient({
+        ...opts,
+        spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/close-ignoring-stub.js", import.meta.url))], options: { shell: false } },
+      });
+      const open = client.newSession.bind(client);
+      client.newSession = async (...a) => {
+        const res = await open(...a);
+        setTimeout(() => { abortedAt = Date.now(); controller.abort(); }, 50);
+        return res;
+      };
+      return client;
+    },
+  });
+  assert.ok(Date.now() - abortedAt < 1500, `doctor's close ran ${Date.now() - abortedAt} ms after the abort`);
+});

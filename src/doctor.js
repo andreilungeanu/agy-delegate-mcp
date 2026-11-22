@@ -34,7 +34,7 @@ function envReport(name, fallback = null) {
 // Time-boxed because a launcher that accepts --version and then never answers would hang doctor
 // forever — and doctor is what you run when delegation is already broken, so a wedged agent is
 // exactly the case it must survive. Same guard the deep handshake has.
-export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS) {
+export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, signal) {
   const { command, options } = spawnSpec;
   const launcher = String(command || "").replace(/^["']|["']$/g, "");
   const isJsScript = isJsLauncher(launcher);
@@ -46,10 +46,12 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     let settled = false;
     let stdout = "";
     let timer;
+    let onAbort;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
       resolve(result);
     };
     const [file, argv] = spawnCommandLine(execCommand, execArgs, options);
@@ -82,6 +84,13 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       finish({ found: true, version: null, error: `version probe timed out after ${timeoutMs}ms` });
     }, timeoutMs);
     timer.unref?.();
+    // A host interrupt ends the probe at once rather than at its timeout.
+    onAbort = () => {
+      if (child.pid) treeKill(child.pid).catch(() => {});
+      finish({ found: true, version: null, error: "version probe aborted by MCP host" });
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -141,12 +150,13 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
     return { ok: false, error: err?.message || String(err) };
   } finally {
     clearTimeout(timer);
-    if (onAbort) signal?.removeEventListener("abort", onAbort);
     // Awaited so doctor does not return while the agent it spawned is still being torn down.
     // A killed child exits in milliseconds; only one that ignores the kill costs the full bound.
     // Graceful, so the session the handshake opened is closed; a timed-out handshake already
     // started the kill above, and stop() joins it.
-    try { await Promise.resolve(client.stop({ graceMs: GRACEFUL_STOP_MS })); } catch {}
+    // The abort listener stays on through the close, so an abort there forces the kill.
+    try { await Promise.resolve(client.stop({ graceMs: signal?.aborted ? 0 : GRACEFUL_STOP_MS })); } catch {}
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -177,7 +187,7 @@ export async function runDoctor({
   onClientReady,
 } = {}) {
   const { capabilities, version } = getClientInfo();
-  const agentProbe = await probeAgentVersion(spawnSpec, versionTimeoutMs);
+  const agentProbe = await probeAgentVersion(spawnSpec, versionTimeoutMs, signal);
 
   /** @type {{ plugin: any, client: any, agent: any & { handshake?: any }, runtime: any, env: any }} */
   const out = {
@@ -212,7 +222,10 @@ export async function runDoctor({
     },
   };
 
-  if (deep) {
+  if (deep && signal?.aborted) {
+    // Interrupted already: no agent is started for a result nobody reads.
+    out.agent.handshake = { ok: false, error: "Handshake aborted by MCP host" };
+  } else if (deep) {
     out.agent.handshake = await runDeepHandshake({
       spawnSpec,
       clientFactory,
