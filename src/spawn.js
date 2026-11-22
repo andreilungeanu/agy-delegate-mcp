@@ -2,15 +2,25 @@ import process from "node:process";
 import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 
-// Splits on whitespace outside quotes. A quoted section joins the token it sits in, quotes removed,
-// as a shell reads --log-file="C:\a b\x.log". Backslashes are literal.
+// Splits on whitespace outside quotes. A quote opens a section only at the start of an argument or
+// right after "=", and only when it closes: --log-file="C:\a b\x.log" is one argument, quotes
+// removed, while the apostrophe in O'Brien stays a character. Backslashes are literal.
 export function splitArgs(raw) {
+  const s = String(raw || "");
   const args = [];
-  const re = /(?:"[^"]*"|'[^']*'|[^\s"']+)+/g;
-  for (const m of String(raw || "").matchAll(re)) {
-    args.push(m[0].replace(/"([^"]*)"|'([^']*)'/g, (_, d, q) => d ?? q));
+  let i = 0;
+  for (;;) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (i >= s.length) return args;
+    let arg = "";
+    while (i < s.length && !/\s/.test(s[i])) {
+      const end = (s[i] === '"' || s[i] === "'") && (arg === "" || arg.endsWith("=")) ? s.indexOf(s[i], i + 1) : -1;
+      if (end === -1) { arg += s[i++]; continue; }
+      arg += s.slice(i + 1, end);
+      i = end + 1;
+    }
+    args.push(arg);
   }
-  return args;
 }
 
 // --dangerously-skip-permissions makes agy approve its own tool calls. The request router approves
