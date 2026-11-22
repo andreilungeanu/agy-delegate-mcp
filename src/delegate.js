@@ -181,6 +181,18 @@ async function openSession(client, resumeSessionId, workspace) {
   }
 }
 
+const isTokenCount = (v) => Number.isFinite(v) && v >= 0;
+
+// The token counts agy's session/prompt reply carries for that turn alone (measured, agy 1.5.14:
+// three one-line turns on one session reported 10273, 10406 and 10575 input tokens). Only the
+// fields ACP names, and only numbers, so an agent's extra keys stay out of the result.
+const USAGE_FIELDS = ["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens", "totalTokens"];
+function readUsage(raw) {
+  if (!raw || typeof raw !== "object") return undefined;
+  const kept = USAGE_FIELDS.filter((k) => isTokenCount(raw[k])).map((k) => [k, raw[k]]);
+  return kept.length ? { scope: "turn", ...Object.fromEntries(kept) } : undefined;
+}
+
 function modelOption(configOptions) {
   return (Array.isArray(configOptions) ? configOptions : []).find((o) => o?.id === "model");
 }
@@ -339,6 +351,9 @@ export async function runDelegate({
     const up = u?.update || {};
     state.lastFrameAt = Date.now();
     state.usageAfterActivity = up.sessionUpdate === "usage_update";
+    if (up.sessionUpdate === "usage_update" && isTokenCount(up.used) && isTokenCount(up.size) && up.size > 0) {
+      state.contextUsage = { used: up.used, size: up.size };
+    }
     // The agent titles the turn a beat after the prompt lands — useful live, when several
     // delegations run, and in timeout forensics. Kept out of the result.
     if (up.sessionUpdate === "session_info_update" && typeof up.title === "string" && up.title) {
@@ -510,6 +525,9 @@ export async function runDelegate({
     if (servedModel !== undefined && servedModel !== model) out.effectiveModel = servedModel;
     if (effectiveEffort !== undefined) out.effectiveEffort = effectiveEffort;
     if (stopReason !== undefined) out.stopReason = stopReason;
+    const usage = readUsage(res?.usage);
+    if (usage) out.usage = usage;
+    if (state.contextUsage) out.context = state.contextUsage;
     // In plan mode agy's message points at the plan rather than containing it, so the plan
     // artifact's content is the plan. Any other artifact is listed by path and summary; its
     // content stays in the file.

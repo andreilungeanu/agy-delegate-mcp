@@ -60,7 +60,8 @@ test("client initializes, opens a session, prompts and emits updates", async () 
   await client.setMode(s.sessionId, "accept-edits");
   const res = await client.prompt(s.sessionId, [{ type: "text", text: "do it" }]);
   assert.equal(res.stopReason, "end_turn");
-  assert.equal(updates.at(-1).update.sessionUpdate, "agent_message_chunk");
+  // agy closes a turn with a usage_update after its last message.
+  assert.deepEqual(updates.slice(-2).map((u) => u.update.sessionUpdate), ["agent_message_chunk", "usage_update"]);
   const log = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line));
   const init = log.find((f) => f.method === "initialize");
   assert.equal(init.params.clientInfo.name, "agy-delegate-mcp");

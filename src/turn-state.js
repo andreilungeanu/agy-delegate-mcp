@@ -65,6 +65,9 @@ function freshFields() {
     // Set by a usage_update and cleared by any other frame: agy closes a turn, prompted or not,
     // with a usage_update after its last message.
     usageAfterActivity: false,
+    // The newest usage_update's { used, size }: the conversation's context in tokens and the
+    // model's window. Unlike the prompt reply's usage it covers a background continuation too.
+    contextUsage: undefined,
     lastFrameAt: 0,
     // Ids observed terminal, so a stale non-terminal re-send for one is recognized and dropped
     // instead of restarting collection — which would demote an already-collected final message

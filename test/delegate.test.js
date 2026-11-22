@@ -154,6 +154,40 @@ test("runDelegate returns assembled result for a fresh session", async () => {
   assert.deepEqual(out.filesReportedByEditTools, ["hello.txt"]);
 });
 
+// Off the wire: the counts come from the session/prompt reply and the context from the
+// usage_update frame, the two places agy 1.5.14 reports them.
+test("runDelegate returns the turn's token usage and the session's context fill", async () => {
+  const out = await runDelegate({ spec: "do the thing", mode: "agent", workspace: process.cwd(), clientFactory: fakeFactory });
+  assert.deepEqual(out.usage, { scope: "turn", inputTokens: 10, outputTokens: 2, cachedReadTokens: 0, totalTokens: 12 });
+  assert.deepEqual(out.context, { used: 12, size: 1048576 });
+});
+
+test("usage keeps only ACP's numeric token fields, and context only a complete usage_update", async () => {
+  const out = await runDelegate({
+    spec: "task", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient();
+      client.prompt = async () => {
+        client.emit("update", { update: { sessionUpdate: "usage_update", used: 50, size: 1000 } });
+        client.emit("update", { update: msgChunk("ok") });
+        // A frame without numbers does not erase the last good reading.
+        client.emit("update", { update: { sessionUpdate: "usage_update" } });
+        client.emit("update", { update: { sessionUpdate: "usage_update", used: "60", size: 1000 } });
+        return { stopReason: "end_turn", usage: { inputTokens: 7, outputTokens: -1, thoughtTokens: "3", costUsd: 0.01 } };
+      };
+      return client;
+    },
+  });
+  assert.deepEqual(out.usage, { scope: "turn", inputTokens: 7 });
+  assert.deepEqual(out.context, { used: 50, size: 1000 });
+});
+
+test("usage and context are absent when the agent reports neither", async () => {
+  const out = await runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: () => stubClient() });
+  assert.equal(out.usage, undefined);
+  assert.equal(out.context, undefined);
+});
+
 test("runDelegate omits filesReportedByEditTools in plan mode when no diff events arrive", async () => {
   const out = await runDelegate({ spec: "draft a plan", mode: "plan", workspace: process.cwd(), clientFactory: fakeFactory });
   assert.equal(out.filesReportedByEditTools, undefined, "absence, not an empty list, means nothing was reported");
@@ -1538,7 +1572,7 @@ test("a signed-out agy fails as not-signed-in with the sign-in step", async () =
 // The continuation agy runs by itself once a backgrounded command finishes, as measured live
 // (agy 1.5.14, probe A): end_turn with the run_command unfinished, then tool_call_update completed,
 // the closing message and a usage_update — all after the prompt has already returned.
-function backgroundFactory({ completeAfterMs, continuation = ["Minimum = 0ms, Maximum = 0ms, Average = 0ms"] }) {
+function backgroundFactory({ completeAfterMs, continuation = ["Minimum = 0ms, Maximum = 0ms, Average = 0ms"], contextAfter }) {
   return () => {
     const client = stubClient("sess-bg");
     const emit = (update) => client.emit("update", { update });
@@ -1550,7 +1584,7 @@ function backgroundFactory({ completeAfterMs, continuation = ["Minimum = 0ms, Ma
         setTimeout(() => {
           emit({ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed" });
           for (const text of continuation) emit(msgChunk(text));
-          emit({ sessionUpdate: "usage_update" });
+          emit({ sessionUpdate: "usage_update", ...contextAfter });
         }, completeAfterMs);
       }
       return { stopReason: "end_turn" };
@@ -1568,6 +1602,16 @@ test("a backgrounded command is waited for, and agy's continuation is the result
   assert.equal(out.result, "Minimum = 0ms, Maximum = 0ms, Average = 0ms");
   assert.equal(out.resultSource, undefined);
   assert.equal(out.protocolWarnings, undefined);
+});
+
+// The prompt reply's usage is settled before the continuation runs, so only context sees it.
+test("context reflects agy's continuation after a backgrounded command", async () => {
+  const out = await runDelegate({
+    spec: "run it", mode: "agent", workspace: process.cwd(),
+    clientFactory: backgroundFactory({ completeAfterMs: 100, contextAfter: { used: 900, size: 1000 } }),
+    backgroundWaitMs: 5000, backgroundSettleMs: 50, backgroundContinueMs: 2000,
+  });
+  assert.deepEqual(out.context, { used: 900, size: 1000 });
 });
 
 test("a backgrounded command that outlasts the wait comes back as unfinished-tool, naming the wait", async () => {

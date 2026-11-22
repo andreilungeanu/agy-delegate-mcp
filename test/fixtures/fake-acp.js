@@ -67,7 +67,8 @@ function agentTurn(m) {
     title: `File ${reportedPath("hello.txt")}`, locations: [{ path: reportedPath("hello.txt") }], rawInput: args, rawOutput: {},
     content: [{ type: "diff", path: reportedPath("hello.txt"), oldText: "", newText: "test" }] });
   update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } });
-  reply(m, { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } });
+  update(sid, { sessionUpdate: "usage_update", used: 12, size: 1048576 });
+  reply(m, { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 0, totalTokens: 12 } });
 }
 
 function planTurn(m) {
