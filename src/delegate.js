@@ -650,7 +650,11 @@ export async function runDelegate({
     // cancel or a shutdown in that window still reaches the agent and cuts the grace short.
     // Graceful when the turn ran its course: agy closes the session and its conversation database.
     // A stall, an abort or an exit gets the kill at once — a wedged agent would only burn the grace.
-    const killNow = ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
+    const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
+    // A host abort during the close is still an abort: a force stop ends the grace and kills.
+    const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };
+    signal?.addEventListener("abort", abortClose, { once: true });
     try { await client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS }); } catch {}
+    finally { signal?.removeEventListener("abort", abortClose); }
   }
 }

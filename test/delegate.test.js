@@ -1914,3 +1914,19 @@ test("a cancel that arrives before the prompt is sent stops the prompt from goin
   assert.equal(out.filesReportedByEditTools, undefined);
   assert.ok(!(out.protocolWarnings ?? []).some((w) => /without emitting any message/.test(w)), JSON.stringify(out.protocolWarnings));
 });
+
+// The abort listener came off before the graceful stop, so a host interrupt during agy's close
+// was ignored and a wedged agent ran out the whole grace.
+test("a host abort during agy's graceful close cuts it short", async () => {
+  const controller = new AbortController();
+  let endedAt;
+  const out = await runDelegate({
+    spec: "task", workspace: process.cwd(), signal: controller.signal,
+    clientFactory: () => new AcpClient({
+      spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/close-ignoring-stub.js", import.meta.url))], options: { shell: false } },
+    }),
+    onTurnEnd: () => { endedAt = Date.now(); setTimeout(() => controller.abort(), 50); },
+  });
+  assert.equal(out.result, "done");
+  assert.ok(Date.now() - endedAt < 1500, `the close ran ${Date.now() - endedAt} ms after the abort`);
+});
