@@ -2244,3 +2244,24 @@ test("the unfinished-tool warning names the open command, not a later question",
   const warning = (out.protocolWarnings ?? []).find((w) => /tool call still running/.test(w)) ?? "";
   assert.match(warning, /npm test/);
 });
+
+// servedModel was read from the last config reply only, so an effort reply without the model entry
+// saved no model, and a later resume naming that model dropped the effort.
+test("an effort reply without the model entry still ties the remembered effort to the model", async () => {
+  const sent = [];
+  const factory = () => {
+    const client = stubClient("sess-partial");
+    const thought = (v) => ({ id: "thought_level", category: "thought_level", currentValue: v, options: ["low", "high"].map((x) => ({ value: x })) });
+    client.configOptions = [{ id: "model", currentValue: "m-a", options: [{ value: "m-a" }, { value: "m-b" }] }, thought("high")];
+    client.setConfigOption = async (_sid, id, value) => {
+      sent.push([id, value]);
+      return id === "thought_level" ? { configOptions: [thought(value)] } : { configOptions: client.configOptions };
+    };
+    client.prompt = async () => { client.emit("update", { update: msgChunk("ok") }); return { stopReason: "end_turn" }; };
+    return client;
+  };
+  await runDelegate({ spec: "x", workspace: process.cwd(), resumeSessionId: "sess-partial", clientFactory: factory, effort: "low" });
+  sent.length = 0;
+  await runDelegate({ spec: "x", workspace: process.cwd(), resumeSessionId: "sess-partial", clientFactory: factory, model: "m-a" });
+  assert.deepEqual(sent, [["thought_level", "low"]], "the effort set on m-a must be re-sent");
+});

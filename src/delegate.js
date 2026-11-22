@@ -462,12 +462,14 @@ export async function runDelegate({
         }
       }
       if (client.cancelRequested) return cancelledInSetup;
+      // Kept across the effort reply, which may carry only the option it changed.
+      const modelBeforeEffort = configOptionValue(options, "model");
       if (targetEffort !== undefined) {
-        const target = targetModel ?? configOptionValue(options, "model") ?? "the session's model";
+        const target = targetModel ?? modelBeforeEffort ?? "the session's model";
         options = optionsFrom(await applyEffort(client, sessionId, target, targetEffort, options));
       }
       if (client.cancelRequested) return cancelledInSetup;
-      servedModel = configOptionValue(options, "model");
+      servedModel = configOptionValue(options, "model") ?? modelBeforeEffort;
       // Saved once agy accepted them, with the model agy reports, so an effort set on agy's default
       // is tied to that model.
       if (targetModel !== undefined || targetEffort !== undefined) rememberSettings(sessionId, { model: targetModel ?? servedModel, effort: targetEffort });
