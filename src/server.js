@@ -88,6 +88,7 @@ export const delegateOutputShape = {
       command: z.string(),
       exitCode: z.number().optional(),
       status: z.string().optional(),
+      runs: z.number().optional(),
     }).strict()).optional(),
     commandsOmitted: z.number().optional(),
   }).strict().optional(),

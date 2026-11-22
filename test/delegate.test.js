@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
-import { runDelegate as rawRunDelegate, readUsage, MAX_REPORTED_COMMANDS } from "../src/delegate.js";
+import { runDelegate as rawRunDelegate, readUsage, RECENT_COMMANDS, OLDER_FAILED_COMMANDS } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
@@ -405,7 +405,7 @@ const readFileCall = (id, status) => ({
   kind: "read", status, title: "File a.js", rawInput: { Path: "a.js" },
 });
 
-test("execution counts each tool call once by kind and lists commands with agy's exit codes", async () => {
+test("execution counts each tool call once by kind and lists a repeated command once, at its last run", async () => {
   const plan = { ArtifactMetadata: { Summary: "plan" }, Content: "# plan", Path: path.join(tmpdir(), "brain", "plan.md") };
   const out = await replayResult([
     readFileCall("r1", "in_progress"),
@@ -424,7 +424,7 @@ test("execution counts each tool call once by kind and lists commands with agy's
   ]);
   assert.deepEqual(out.execution, {
     toolCalls: { read: 1, execute: 2, other: 1 },
-    commands: [{ command: "npm test", exitCode: 1 }, { command: "npm test", exitCode: 0 }],
+    commands: [{ command: "npm test", exitCode: 0, runs: 2 }],
   });
 });
 
@@ -436,18 +436,39 @@ test("execution marks a command still running when the turn ended", async () => 
   assert.deepEqual(out.execution.commands, [{ command: "npm run dev", status: "in_progress" }]);
 });
 
-test("execution keeps the newest commands and counts the ones it dropped", async () => {
+// Commands run once each, in order: i fails with exit 2 when failing(i), else passes.
+const commandRun = (count, failing = () => false) => {
   const updates = [];
-  for (let i = 0; i < MAX_REPORTED_COMMANDS + 5; i++) {
-    updates.push(runCommand(`c${i}`, `step ${i}`, "in_progress"), runCommand(`c${i}`, `step ${i}`, "completed", 0));
+  for (let i = 0; i < count; i++) {
+    updates.push(runCommand(`c${i}`, `step ${i}`, "in_progress"), runCommand(`c${i}`, `step ${i}`, "completed", failing(i) ? 2 : 0));
   }
+  return updates;
+};
+
+test("execution lists the newest commands, passing ones included, and keeps older failures", async () => {
+  const updates = commandRun(15, (i) => i === 1);
+  // Started early and never finished: a failure for this purpose, kept though older.
+  updates.splice(4, 0, runCommand("bg", "npm run dev", "in_progress"));
   updates.push(runCommand("long", "x".repeat(400), "in_progress"), runCommand("long", "x".repeat(400), "completed", 0));
   const out = await replayResult([...updates, msgChunk("done")]);
-  assert.equal(out.execution.toolCalls.execute, MAX_REPORTED_COMMANDS + 6);
-  assert.equal(out.execution.commands.length, MAX_REPORTED_COMMANDS);
-  assert.equal(out.execution.commandsOmitted, 6);
-  assert.equal(out.execution.commands[0].command, "step 6");
-  assert.equal(out.execution.commands.at(-1).command, "x".repeat(300) + "…");
+  assert.equal(out.execution.toolCalls.execute, 17);
+  assert.deepEqual(out.execution.commands.slice(0, 2), [
+    { command: "step 1", exitCode: 2 },
+    { command: "npm run dev", status: "in_progress" },
+  ]);
+  const recent = out.execution.commands.slice(2);
+  assert.equal(recent.length, RECENT_COMMANDS);
+  assert.deepEqual(recent.slice(0, -1).map((c) => c.command), ["step 8", "step 9", "step 10", "step 11", "step 12", "step 13", "step 14"]);
+  assert.deepEqual(recent.at(-1), { command: "x".repeat(150) + "…", exitCode: 0 });
+  assert.equal(out.execution.commandsOmitted, 17 - 2 - RECENT_COMMANDS);
+});
+
+test("execution keeps at most a few older failures, the newest of them", async () => {
+  const out = await replayResult([...commandRun(12 + RECENT_COMMANDS, (i) => i < 12), msgChunk("done")]);
+  const older = out.execution.commands.slice(0, -RECENT_COMMANDS);
+  assert.deepEqual(older.map((c) => c.command), ["step 7", "step 8", "step 9", "step 10", "step 11"]);
+  assert.equal(older.length, OLDER_FAILED_COMMANDS);
+  assert.equal(out.execution.commandsOmitted, 12 - OLDER_FAILED_COMMANDS);
 });
 
 test("execution is absent when the agent called no tools", async () => {

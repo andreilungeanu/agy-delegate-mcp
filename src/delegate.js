@@ -197,32 +197,49 @@ export function readUsage(raws) {
   return { scope: "turn", ...Object.fromEntries(fields.map((k) => [k, reported.reduce((sum, raw) => sum + (isTokenCount(raw[k]) ? raw[k] : 0), 0)])) };
 }
 
-// The newest commands are kept: a test run usually comes last.
-export const MAX_REPORTED_COMMANDS = 20;
-const MAX_COMMAND_CHARS = 300;
+// Sized for every delegation result in a conversation: the newest commands, where a test run
+// usually lands, plus older ones that failed.
+export const RECENT_COMMANDS = 8;
+export const OLDER_FAILED_COMMANDS = 5;
+const MAX_COMMAND_CHARS = 150;
+
+const commandFailed = (c) => (c.exitCode !== undefined && c.exitCode !== 0) || (c.status !== undefined && c.status !== "completed");
 
 // What the agent did, from its tool calls: a count per ACP kind and the commands it ran with the
 // exit code agy reported. A non-zero exit still arrives as completed, so exitCode is the outcome;
-// status appears only for a command that did not complete. agy's own files (the plan) are
-// reported as plan and artifacts instead.
+// status appears only for a command that did not complete. A command run more than once is listed
+// once, at its last run, with runs counting them. agy's own files (the plan) are reported as plan
+// and artifacts instead.
 export function executionSummary(records) {
   const calls = [...records.values()].filter((r) => !r.artifact);
   if (!calls.length) return undefined;
   /** @type {Record<string, number>} */
   const toolCalls = {};
   for (const r of calls) toolCalls[r.kind || "other"] = (toolCalls[r.kind || "other"] ?? 0) + 1;
-  const commands = calls.filter((r) => r.kind === "execute").map((r) => {
+  // Keyed by the full text, so two commands sharing a truncated prefix stay apart. Re-inserting
+  // moves a command to its last run.
+  /** @type {Map<string, { runs: number, exitCode?: number, status?: string }>} */
+  const byText = new Map();
+  for (const r of calls) {
+    if (r.kind !== "execute") continue;
     const text = String(r.command ?? r.title ?? "");
-    return {
-      command: text.length > MAX_COMMAND_CHARS ? text.slice(0, MAX_COMMAND_CHARS) + "…" : text,
-      ...(r.exitCode !== undefined ? { exitCode: r.exitCode } : {}),
-      ...(r.status !== undefined && r.status !== "completed" ? { status: r.status } : {}),
-    };
-  });
+    const runs = (byText.get(text)?.runs ?? 0) + 1;
+    byText.delete(text);
+    byText.set(text, { runs, exitCode: r.exitCode, status: r.status });
+  }
+  const all = [...byText].map(([text, c]) => ({ text, ...c }));
+  const recent = all.slice(-RECENT_COMMANDS);
+  const olderFailed = all.slice(0, -RECENT_COMMANDS).filter(commandFailed).slice(-OLDER_FAILED_COMMANDS);
+  const listed = [...olderFailed, ...recent].map((c) => ({
+    command: c.text.length > MAX_COMMAND_CHARS ? c.text.slice(0, MAX_COMMAND_CHARS) + "…" : c.text,
+    ...(c.exitCode !== undefined ? { exitCode: c.exitCode } : {}),
+    ...(c.status !== undefined && c.status !== "completed" ? { status: c.status } : {}),
+    ...(c.runs > 1 ? { runs: c.runs } : {}),
+  }));
   /** @type {{ toolCalls: Record<string, number>, commands?: any[], commandsOmitted?: number }} */
   const out = { toolCalls };
-  if (commands.length) out.commands = commands.slice(-MAX_REPORTED_COMMANDS);
-  if (commands.length > MAX_REPORTED_COMMANDS) out.commandsOmitted = commands.length - MAX_REPORTED_COMMANDS;
+  if (listed.length) out.commands = listed;
+  if (all.length > listed.length) out.commandsOmitted = all.length - listed.length;
   return out;
 }
 
