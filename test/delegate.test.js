@@ -2099,3 +2099,42 @@ test("frames that arrive while attachments are read are not part of the turn", a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The loop threw at the first steer that failed after taking over, and a steer queued behind it
+// that then succeeded was never read.
+test("a steer that succeeds after one that failed mid-turn is the delegation's result", async () => {
+  let clientRef;
+  const out = await runDelegate({
+    spec: "task", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient("sess-q");
+      let endFirst;
+      const steers = [];
+      let open = false;
+      client.acceptSteers = (on) => { open = on; };
+      client.hasSteer = () => steers.length > 0;
+      client.takeSteer = () => steers.shift();
+      client.prompt = () => new Promise((r) => { endFirst = r; });
+      client.steer = (_sid, text) => {
+        if (!open) return "not-ready";
+        if (text === "A") {
+          endFirst({ stopReason: "end_turn" });
+          steers.push(stampSettlement(new Promise((_, reject) => setTimeout(() => reject(new Error("quota exhausted")), 20))));
+        } else {
+          steers.push(stampSettlement(new Promise((r) => setTimeout(() => {
+            client.emit("update", { sessionId: "sess-q", update: msgChunk("B answered") });
+            r({ stopReason: "end_turn" });
+          }, 60))));
+        }
+        return "steered";
+      };
+      clientRef = client;
+      return client;
+    },
+    onSessionReady: () => {
+      const poll = () => { if (clientRef.steer("sess-q", "A") !== "steered") return setTimeout(poll, 5); clientRef.steer("sess-q", "B"); };
+      poll();
+    },
+  });
+  assert.equal(out.result, "B answered");
+});

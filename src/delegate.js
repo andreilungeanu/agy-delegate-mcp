@@ -533,8 +533,10 @@ export async function runDelegate({
             steerWarnings.push(`a steer was rejected by agy and did not redirect the turn: ${reply.error?.message || String(reply.error)}`);
           } else {
             // Failed after taking the turn over (agy had already ended the prompt it redirected):
-            // the turn failed, as a prompt failing would.
-            throw reply.error;
+            // the turn failed, as a prompt failing would — unless a steer queued behind it succeeds.
+            turn = undefined;
+            turnError = reply.error;
+            turnSeq = reply.seq;
           }
         }
         if (turnError) throw turnError;
