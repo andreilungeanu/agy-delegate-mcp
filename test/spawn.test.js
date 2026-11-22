@@ -143,7 +143,7 @@ test("doctor reads a .ps1 launcher's version, and resolves a bare .ps1 name on P
     const spec = withAgentEnv({ ACP_AGENT_COMMAND: "agent.ps1", ACP_AGENT_ARGS: undefined }, () => resolveAcpSpawn());
     const argv = spawnArgv(spec.command, spec.args, spec.options);
     assert.match(argv.command, /powershell\.exe$/i);
-    assert.equal(argv.args.at(-3), path.join(dir, "agent.ps1"), "the bare name resolves to the script on PATH");
+    assert.equal(argv.args[argv.args.indexOf("-File") + 1], path.join(dir, "agent.ps1"), "the bare name resolves to the script on PATH");
     const out = await runDoctor({ spawnSpec: spec });
     assert.equal(out.agent.found, true);
     assert.equal(out.agent.version, "ps1-agent 1.0");
