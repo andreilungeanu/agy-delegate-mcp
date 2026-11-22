@@ -330,16 +330,15 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       // aimed at a turn: the result is left alone, and force only cuts the close short.
       const ending = [...handles].filter((handle) => handle.ended);
       const live = [...handles].filter((handle) => !handle.ended);
-      const cutClose = () => Promise.all(ending.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false)));
+      const stopQuietly = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
       if (live.length === 0) {
-        if (force) await cutClose();
+        if (force) await Promise.all(ending.map(stopQuietly));
         return statusResult("not-running", sessionId);
       }
       // Cancel every turn running on the id: the caller named a session, not one of the
       // turns that happen to share it.
       for (const handle of live) handle.cancelRequested = true;
       await Promise.all(live.map((handle) => handle.client.cancel(sessionId).catch(() => {})));
-      if (force) await cutClose();
       if (!force) {
         // The handles stay registered: session/cancel is best-effort, so the turn may still
         // be running. Dropping them here made the natural escalation — cancel, wait, cancel
@@ -347,20 +346,26 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         // finally removes its handle when the turn actually settles.
         return statusResult("cancelled", sessionId);
       }
-      // Watched rather than slept through: agy stops a cancelled turn in milliseconds, and the
-      // delegation's finally drops its handle the moment the turn settles.
-      // A turn that settles inside the grace ends its handle; force then also cuts agy's close
-      // short instead of letting it run out its graceful stop.
+      // Each turn's close is cut as soon as that turn settles, not when the last one does; agy
+      // stops a cancelled turn in milliseconds. What is still running when the grace ends is killed.
+      const closing = ending.map(stopQuietly);
+      const cut = new Set();
       const graceEnds = Date.now() + forceGraceMs;
-      while (Date.now() < graceEnds && live.some((handle) => !handle.ended && inFlight.get(sessionId)?.has(handle))) {
+      for (;;) {
+        for (const handle of live) {
+          if (!cut.has(handle) && (handle.ended || !inFlight.get(sessionId)?.has(handle))) {
+            cut.add(handle);
+            closing.push(stopQuietly(handle));
+          }
+        }
+        if (cut.size === live.length || Date.now() >= graceEnds) break;
         await new Promise((r) => setTimeout(r, Math.min(50, Math.max(1, graceEnds - Date.now()))));
       }
-      const settledNow = live.filter((handle) => handle.ended || !inFlight.get(sessionId)?.has(handle));
-      await Promise.all(settledNow.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false)));
+      await Promise.all(closing);
       // Snapshot before awaiting stop. A resume that registers during teardown must not be
       // swept out of the map — it was never killed, and inFlight.delete(sessionId) would
       // hide it from cancel and shutdown.
-      const toKill = live.filter((handle) => !settledNow.includes(handle));
+      const toKill = live.filter((handle) => !cut.has(handle));
       if (toKill.length === 0) return statusResult("cancelled", sessionId);
       const observed = await Promise.all(
         toKill.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false))

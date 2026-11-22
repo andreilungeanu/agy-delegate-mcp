@@ -1235,3 +1235,45 @@ test("steer reports not-running for a delegation whose turn has ended, whatever 
   const map = new Map([["sess-ending", new Set([{ ended: true, client: { steer: () => "not-ready" } }])]]);
   assert.equal(steerSession(map, new Set(["sess-ending"]), "sess-ending", "go"), "not-running");
 });
+
+// Two turns on one id: A stops on the cancel, B ignores it. A's close ran on until the poll for
+// B gave up, so a turn that had settled spent the whole force grace closing.
+test("force cancel cuts the close of a turn that settles at once, while another turn on the id runs on", async () => {
+  let ready = 0;
+  let bothReady;
+  const allReady = new Promise((r) => { bothReady = r; });
+  const stoppedAt = {};
+  const makeRun = (name, settlesOnCancel) => async ({ onSessionReady, onTurnEnd }) => {
+    let settle;
+    const settled = new Promise((r) => { settle = r; });
+    let killed;
+    const dead = new Promise((r) => { killed = r; });
+    onSessionReady("sess-shared", {
+      cancel: async () => { if (settlesOnCancel) settle(); },
+      stop: () => { stoppedAt[name] ??= Date.now(); settle(); killed(); return true; },
+    });
+    if (++ready === 2) bothReady();
+    await settled;
+    onTurnEnd();
+    await dead;
+    return { result: name, sessionId: "sess-shared" };
+  };
+  let call = 0;
+  const runDelegate = (opts) => (call++ === 0 ? makeRun("A", true) : makeRun("B", false))(opts);
+  const server = buildServer({ runDelegate, forceGraceMs: 1000 });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const a = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "a" } });
+    const b = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "b" } });
+    await allReady;
+    const started = Date.now();
+    const res = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-shared", force: true } });
+    assert.equal(payload(res).status, "killed");
+    assert.ok(stoppedAt.A - started < 400, `A's close was cut ${stoppedAt.A - started} ms after the cancel`);
+    await Promise.all([a, b]);
+  } finally {
+    await client.close();
+  }
+});
