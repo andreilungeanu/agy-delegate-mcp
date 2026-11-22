@@ -71,8 +71,8 @@ function freshFields() {
     // ~/.gemini/antigravity-cli/brain/<sessionId>/. Keyed by path, so a rewrite replaces.
     artifacts: new Map(),
     touched: new Set(),
-    // One record per tool call id, in first-seen order, for the execution summary: agy re-sends
-    // finished calls, so its frames merge rather than add.
+    // One record per tool call, in first-seen order, for the execution summary: agy re-sends
+    // finished calls, so their frames merge.
     toolCallRecords: new Map(),
     // The questions of each ask_question call, normalized, by call id.
     questions: new Map(),
@@ -191,11 +191,17 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
     },
 
     // Merges one tool_call or tool_call_update frame into its call's record. A re-sent non-terminal
-    // status does not reopen a finished call; a fresh tool_call for its id does (agy reusing it).
+    // status does not reopen a finished call; a fresh tool_call for its id is a new call (agy reusing
+    // the id), so the finished record keeps its place under a key of its own.
     recordToolCall(up, isArtifact) {
       const id = up?.toolCallId;
       if (id == null) return;
-      const rec = state.toolCallRecords.get(id) ?? {};
+      let rec = state.toolCallRecords.get(id);
+      if (rec && up.sessionUpdate === "tool_call" && isTerminalToolStatus(rec.status) && !isTerminalToolStatus(up.status)) {
+        state.toolCallRecords = new Map([...state.toolCallRecords].map(([k, v]) => [k === id ? Symbol() : k, v]));
+        rec = undefined;
+      }
+      rec ??= {};
       if (isArtifact) rec.artifact = true;
       if (typeof up.kind === "string" && up.kind) rec.kind = up.kind;
       if (typeof up.title === "string" && up.title) rec.title = up.title;

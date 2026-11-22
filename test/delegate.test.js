@@ -405,6 +405,16 @@ const readFileCall = (id, status) => ({
   kind: "read", status, title: "File a.js", rawInput: { Path: "a.js" },
 });
 
+test("execution keeps a finished command apart from a new one agy runs under the same id", async () => {
+  const out = await replayResult([
+    runCommand("t1", "npm test"), runCommand("t1", "npm test", "completed", 1),
+    runCommand("t1", "npm run lint"),
+    msgChunk("Done."),
+  ]);
+  assert.equal(out.execution.toolCalls.execute, 2);
+  assert.deepEqual(out.execution.commands, [{ command: "npm test", exitCode: 1 }, { command: "npm run lint", status: "in_progress" }]);
+});
+
 test("execution counts each tool call once by kind and lists a repeated command once, at its last run", async () => {
   const plan = { ArtifactMetadata: { Summary: "plan" }, Content: "# plan", Path: path.join(tmpdir(), "brain", "plan.md") };
   const out = await replayResult([
