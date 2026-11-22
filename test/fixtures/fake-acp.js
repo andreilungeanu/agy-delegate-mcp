@@ -14,7 +14,7 @@ const MODES = ["default", "accept-edits", "auto", "plan"];
 const DEFAULTS = { model: "gemini-4-neon", thought: "high", mode: "default" };
 // A session agy knows from an earlier process, for resume.
 // Separate ids, so tests of the bridge's per-session memory do not share one session.
-const sessions = new Map([["known-old", { cwd: "" }], ["known-other", { cwd: "" }]]);
+const sessions = new Map([["known-old", { cwd: "" }], ["known-other", { cwd: "" }], ["known-fresh", { cwd: "" }]]);
 let counter = 0;
 let state = { ...DEFAULTS };
 let cwd = process.cwd();

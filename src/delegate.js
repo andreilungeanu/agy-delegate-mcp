@@ -430,6 +430,7 @@ export async function runDelegate({
   let out;
   let servedModel;
   let effectiveEffort;
+  let noSettingsRecord = false;
   const contextWarnings = [];
   try {
     const res = await supervisor.supervise(async () => {
@@ -446,6 +447,8 @@ export async function runDelegate({
       if (client.cancelRequested) return cancelledInSetup;
       // Only a resume that took inherits: a fallback to a fresh session is a different session.
       const earlier = resumeSessionId && sessionId === resumeSessionId ? sessionSettings.get(sessionId) : undefined;
+      // The record lives in memory: a server restarted since the session ran has none to apply.
+      noSettingsRecord = !!resumeSessionId && sessionId === resumeSessionId && !earlier && model === undefined;
       const targetModel = model ?? earlier?.model;
       // A remembered effort holds only on the model it was set for: another model may not offer it.
       const targetEffort = effort ?? (targetModel === earlier?.model ? earlier?.effort : undefined);
@@ -602,6 +605,9 @@ export async function runDelegate({
       .map((a) => ({ path: a.path, ...(a.summary !== undefined ? { summary: a.summary } : {}) }));
     if (others.length) out.artifacts = others;
     if (resumeError) protocolWarnings.push(`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`);
+    if (noSettingsRecord) {
+      protocolWarnings.push(`agy reopened the session at its default model${servedModel ? ` (${servedModel})` : ""}: this server has no record of the model set earlier, as it keeps none across restarts. Pass model to choose one.`);
+    }
     protocolWarnings.push(...contextWarnings);
     protocolWarnings.push(...frameWarnings);
     protocolWarnings.push(...steerWarnings);

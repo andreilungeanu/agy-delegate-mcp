@@ -2187,3 +2187,17 @@ test("a config call agy rejects after a cancel reports the delegation cancelled"
   });
   assert.equal(out.stopReason, "cancelled");
 });
+
+// The record is in memory, so a server restarted since the session ran has none, and agy reopens
+// the session at its defaults. The caller is told rather than left to notice effectiveModel.
+test("a resume with no remembered model and none given warns that agy's default ran", async () => {
+  const run = (args) => runDelegate({ spec: "do the thing", workspace: process.cwd(), resumeSessionId: "known-fresh", clientFactory: fakeFactory, ...args });
+  const bare = await run({});
+  assert.equal(bare.resumed, true);
+  assert.ok(bare.protocolWarnings?.some((w) => /no record of the model/.test(w) && /gemini-4-neon/.test(w)), JSON.stringify(bare.protocolWarnings));
+  const named = await run({ model: "gemini-3.8-flash" });
+  assert.ok(!(named.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)));
+  const carried = await run({});
+  assert.equal(carried.effectiveModel, "gemini-3.8-flash");
+  assert.ok(!(carried.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)));
+});
