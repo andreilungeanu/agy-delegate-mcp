@@ -158,7 +158,7 @@ export const doctorOutputShape = {
 export const delegateInputSchema = z.object({
   spec: z.string().trim().min(1, "spec must not be blank").describe("Task brief: goal, scope, fixed decisions quoted exactly, acceptance criteria. Sent as written. Point at files to read rather than pasting code, or attach them with contextFiles."),
   mode: z.enum(["agent", "plan", "ask"]).default("agent").describe("agent implements; plan writes a plan, returned as plan; ask answers. plan and ask are instructions to the agent, not limits."),
-  resumeSessionId: z.string().optional().describe("Continue an existing agy session."),
+  resumeSessionId: z.string().trim().optional().describe("Continue an existing agy session."),
   workspace: z.string().trim().min(1, "workspace must not be blank").describe("The agent's working directory, not a limit. Smallest directory holding the task's files; with no such directory the project root is the floor. Must already exist; never create one for the call."),
   model: z.string().trim().min(1, "model must be a non-empty string").optional().describe("agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, agy's default runs and effectiveModel names it. doctor deep:true lists every id."),
   // Which values a model offers is only knowable after selecting it, so this stays an open
@@ -219,7 +219,8 @@ export async function runDelegateTool({ args, extra, runDelegate, inFlight, pend
     const out = await runDelegate({
       spec,
       mode,
-      resumeSessionId,
+      // Blank is no resume: hosts fill optional fields with "".
+      resumeSessionId: resumeSessionId || undefined,
       workspace,
       model,
       effort,

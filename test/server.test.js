@@ -1320,3 +1320,21 @@ test("shutdown retries a stop that did not see the agent exit before leaving", a
   assert.equal(calls.length, 2, "the stop must be retried once");
   assert.deepEqual(exited, [0]);
 });
+
+// An untrimmed id missed the session and started a fresh one without its context; a blank one
+// spawned agy to fail a resume of "".
+test("delegate trims resumeSessionId and treats a blank one as none", async () => {
+  const seen = [];
+  const runDelegate = async ({ resumeSessionId }) => { seen.push(resumeSessionId); return { result: "ok", sessionId: "s" }; };
+  const server = buildServer({ runDelegate });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    await client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "x", resumeSessionId: " sess-1 " } });
+    await client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "x", resumeSessionId: "   " } });
+    assert.deepEqual(seen, ["sess-1", undefined]);
+  } finally {
+    await client.close();
+  }
+});
