@@ -1720,3 +1720,74 @@ test("a cancel during the background wait ends it at once and reports cancelled"
   assert.ok(Date.now() - started < 2000, `cancel took ${Date.now() - started} ms to end the wait`);
   assert.equal(out.stopReason, "cancelled");
 });
+
+// Steering, as agy 1.5.14 did it: a second session/prompt settles the first at once with end_turn,
+// and the redirected turn ends with the second prompt's reply.
+async function steerWhenOpen(getClient, sessionId, text) {
+  for (let i = 0; i < 200; i++) {
+    const client = getClient();
+    if (client?.steer(sessionId, text)) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.fail("the delegation never accepted a steer");
+}
+
+test("a steered delegation returns the redirected turn, not the end_turn the steer forced", async () => {
+  let client;
+  let steered;
+  const out = await runDelegate({
+    spec: "STEERABLE task", workspace: process.cwd(),
+    clientFactory: () => (client = fakeFactory()),
+    onSessionReady: (sid) => { steered = steerWhenOpen(() => client, sid, "go left"); },
+  });
+  await steered;
+  assert.equal(out.result, "STEERED: go left");
+  assert.equal(out.resultSource, undefined);
+  assert.deepEqual(out.usage, { scope: "turn", inputTokens: 12, totalTokens: 12 }, "both replies' usage is summed");
+  assert.deepEqual(out.context, { used: 40, size: 1048576 });
+});
+
+test("a steer is refused before the prompt is sent and after the delegation has returned", async () => {
+  let client;
+  let early;
+  const out = await runDelegate({
+    spec: "do the thing", workspace: process.cwd(),
+    clientFactory: () => (client = fakeFactory()),
+    onSessionReady: (sid) => { early = client.steer(sid, "too soon"); },
+  });
+  assert.equal(early, false);
+  assert.equal(out.result, "done");
+  assert.equal(client.steer(out.sessionId, "too late"), false);
+});
+
+test("a steer during the background wait ends the wait and returns the steered reply", async () => {
+  const started = Date.now();
+  let clientRef;
+  const out = await runDelegate({
+    spec: "run it", mode: "agent", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = backgroundFactory({})();
+      let open = false;
+      const steers = [];
+      client.acceptSteers = (on) => { open = on; };
+      client.hasSteer = () => steers.length > 0;
+      client.takeSteer = () => steers.shift();
+      client.steer = (_sid, text) => {
+        if (!open) return false;
+        steers.push((async () => {
+          client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "failed" } });
+          client.emit("update", { update: msgChunk(`steered: ${text}`) });
+          return { stopReason: "end_turn" };
+        })());
+        return true;
+      };
+      clientRef = client;
+      return client;
+    },
+    onSessionReady: () => { setTimeout(() => clientRef.steer("sess-bg", "stop the server"), 150); },
+    backgroundWaitMs: 10000, backgroundSettleMs: 50, backgroundContinueMs: 10000,
+  });
+  assert.ok(Date.now() - started < 2000, `the steer took ${Date.now() - started} ms to end the wait`);
+  assert.equal(out.result, "steered: stop the server");
+  assert.equal(out.resultSource, undefined);
+});

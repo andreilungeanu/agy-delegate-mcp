@@ -199,12 +199,16 @@ const isTokenCount = (v) => Number.isFinite(v) && v >= 0;
 
 // The token counts agy's session/prompt reply carries for that turn alone (measured, agy 1.5.14:
 // three one-line turns on one session reported 10273, 10406 and 10575 input tokens). Only the
-// fields ACP names, and only numbers, so an agent's extra keys stay out of the result.
+// fields ACP names, and only numbers, so an agent's extra keys stay out of the result. A steered
+// turn has one reply per prompt, each covering its own part, so they are summed.
 const USAGE_FIELDS = ["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens", "totalTokens"];
-function readUsage(raw) {
-  if (!raw || typeof raw !== "object") return undefined;
-  const kept = USAGE_FIELDS.filter((k) => isTokenCount(raw[k])).map((k) => [k, raw[k]]);
-  return kept.length ? { scope: "turn", ...Object.fromEntries(kept) } : undefined;
+function readUsage(raws) {
+  const sums = {};
+  for (const raw of raws) {
+    if (!raw || typeof raw !== "object") continue;
+    for (const k of USAGE_FIELDS) if (isTokenCount(raw[k])) sums[k] = (sums[k] ?? 0) + raw[k];
+  }
+  return Object.keys(sums).length ? { scope: "turn", ...sums } : undefined;
 }
 
 function modelOption(configOptions) {
@@ -420,6 +424,8 @@ export async function runDelegate({
       backgroundWaited = Date.now() - startedAt;
       if (backgroundWaited >= backgroundWaitMs) return;
       if (client.cancelRequested) return "cancelled";
+      // A steer redirects the turn; its own prompt reply is what ends it now.
+      if (client.hasSteer?.()) return;
       if (state.backgroundToolCalls().length) continue;
       const quietMs = Date.now() - state.lastFrameAt;
       if (state.usageAfterActivity && quietMs >= backgroundSettleMs) return;
@@ -466,14 +472,27 @@ export async function runDelegate({
       supervisor.promptStarted();
       startHeartbeat();
       promptInFlight = true;
+      client.acceptSteers?.(true);
       try {
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
-        const turn = await client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
-        if (state.backgroundToolCalls().length && await waitForBackground() === "cancelled") {
-          return { ...turn, stopReason: "cancelled" };
+        let turn = await client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
+        const replies = [turn];
+        // A steer settles the prompt before it at once with end_turn, so the turn ends only when
+        // the newest steer's reply does. Each pass re-checks for a background command, which a
+        // steered turn can leave running too.
+        for (;;) {
+          if (!client.hasSteer?.() && state.backgroundToolCalls().length && await waitForBackground() === "cancelled") {
+            return { ...turn, stopReason: "cancelled", replies };
+          }
+          const steer = client.takeSteer?.();
+          if (!steer) break;
+          turn = await steer;
+          replies.push(turn);
         }
-        return turn;
+        return { ...turn, replies };
       } finally {
+        // Closed in the same tick as the last check above, so no steer lands unread.
+        client.acceptSteers?.(false);
         // The result is assembled across awaits below, so without this a frame trailing the
         // settled turn is still folded into it.
         promptInFlight = false;
@@ -539,7 +558,7 @@ export async function runDelegate({
     if (servedModel !== undefined && servedModel !== model) out.effectiveModel = servedModel;
     if (effectiveEffort !== undefined) out.effectiveEffort = effectiveEffort;
     if (stopReason !== undefined) out.stopReason = stopReason;
-    const usage = readUsage(res?.usage);
+    const usage = readUsage((res?.replies ?? [res]).map((r) => r?.usage));
     if (usage) out.usage = usage;
     if (state.contextUsage) out.context = state.contextUsage;
     // In plan mode agy's message points at the plan rather than containing it, so the plan

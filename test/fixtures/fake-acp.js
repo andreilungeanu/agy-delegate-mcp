@@ -71,6 +71,26 @@ function agentTurn(m) {
   reply(m, { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 0, totalTokens: 12 } });
 }
 
+// A turn held on a running command until a second prompt steers it, as agy 1.5.14 did: the held
+// prompt settles at once with end_turn, the command fails, and the steering prompt's reply closes
+// the redirected turn. A cancel settles the held prompt as cancelled.
+let held = null;
+function holdTurn(m) {
+  held = m;
+  update(m.params.sessionId, { sessionUpdate: "tool_call", toolCallId: "c-hold", name: "run_command", title: "sleep 60", kind: "execute", status: "in_progress" });
+}
+function steerTurn(m) {
+  const sid = m.params.sessionId;
+  reply(held, { stopReason: "end_turn", usage: { inputTokens: 5, totalTokens: 5 } });
+  held = null;
+  setTimeout(() => {
+    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "c-hold", status: "failed" });
+    update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `STEERED: ${m.params.prompt?.[0]?.text}` } });
+    update(sid, { sessionUpdate: "usage_update", used: 40, size: 1048576 });
+    reply(m, { stopReason: "end_turn", usage: { inputTokens: 7, totalTokens: 7 } });
+  }, 20);
+}
+
 function planTurn(m) {
   const sid = m.params.sessionId;
   const planPath = path.join(cwd, ".brain", sid, "plan_add_changelog.md");
@@ -153,8 +173,11 @@ rl.on("line", (line) => {
       return reply(m, {});
     case "session/prompt":
       if (!Array.isArray(p.prompt)) return fail(m, -32603, "Internal error");
+      if (held) return steerTurn(m);
+      if (/STEERABLE/.test(p.prompt[0]?.text ?? "")) return holdTurn(m);
       return state.mode === "plan" ? planTurn(m) : agentTurn(m);
     case "session/cancel":
+      if (held) { reply(held, { stopReason: "cancelled" }); held = null; }
       return;
     case "session/close":
       return reply(m, {});

@@ -34,7 +34,7 @@ function registerInFlight(map, sessionId, handle) {
   else map.set(sessionId, new Set([handle]));
 }
 /** @returns {import("@modelcontextprotocol/sdk/types.js").CallToolResult} */
-function cancelResult(status, sessionId) {
+function statusResult(status, sessionId) {
   return { content: [{ type: "text", text: JSON.stringify({ status, sessionId }) }] };
 }
 function unregisterInFlight(map, sessionId, handle) {
@@ -166,6 +166,18 @@ export const delegateInputSchema = z.object({
   effort: z.string().trim().min(1).optional().describe("agy thinking level for the selected model (low, medium, high, xhigh). Levels differ per model; invalid values fail before the prompt and name the accepted set. Pass only when the user asks for agy effort — the host's own reasoning setting is unrelated."),
   contextFiles: z.array(z.string()).optional().describe("Paths to attach instead of pasting contents into spec. Text becomes references the agent may open; images (png/jpg/gif/webp, <5MB) are sent inline. Relative paths resolve against workspace but are not limited to it. Skips are reported in protocolWarnings, never fatal."),
 });
+
+// Every turn running on the id is steered, as cancel cancels every one: the caller named a
+// session. A delegation still setting up its session takes no steer until its prompt is out.
+export function steerSession(map, seen, sessionId, message) {
+  const handles = map.get(sessionId);
+  if (!handles || handles.size === 0) return seen.has(sessionId) ? "not-running" : "not-found";
+  let sent = false;
+  for (const handle of handles) {
+    try { if (handle.client.steer?.(sessionId, message)) sent = true; } catch {}
+  }
+  return sent ? "steered" : "not-ready";
+}
 
 /**
  * @param {{
@@ -302,7 +314,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         // A finished session and a garbage id are both "not in flight". Reporting them alike
         // would read as "bad id" for a session that ran and is still resumable.
         const known = seenSessions.has(sessionId);
-        return cancelResult(known ? "not-running" : "not-found", sessionId);
+        return statusResult(known ? "not-running" : "not-found", sessionId);
       }
       // Cancel every turn running on the id: the caller named a session, not one of the
       // turns that happen to share it.
@@ -313,7 +325,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         // be running. Dropping them here made the natural escalation — cancel, wait, cancel
         // with force — report not-found while the agent was alive. Each delegation's own
         // finally removes its handle when the turn actually settles.
-        return cancelResult("cancelled", sessionId);
+        return statusResult("cancelled", sessionId);
       }
       // Watched rather than slept through: agy stops a cancelled turn in milliseconds, and the
       // delegation's finally drops its handle the moment the turn settles.
@@ -322,7 +334,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         await new Promise((r) => setTimeout(r, Math.min(50, Math.max(1, graceEnds - Date.now()))));
       }
       const stillRunning = inFlight.get(sessionId);
-      if (!stillRunning || stillRunning.size === 0) return cancelResult("cancelled", sessionId);
+      if (!stillRunning || stillRunning.size === 0) return statusResult("cancelled", sessionId);
       // Snapshot before awaiting stop. A resume that registers during teardown must not be
       // swept out of the map — it was never killed, and inFlight.delete(sessionId) would
       // hide it from cancel and shutdown.
@@ -332,10 +344,30 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       );
       // "killed" claims the process is gone, so it needs the exit, not just a dispatched signal.
       // When one does not follow, the handles stay registered and force can be tried again.
-      if (!observed.every(Boolean)) return cancelResult("cancelled", sessionId);
+      if (!observed.every(Boolean)) return statusResult("cancelled", sessionId);
       for (const handle of toKill) unregisterInFlight(inFlight, sessionId, handle);
-      return cancelResult("killed", sessionId);
+      return statusResult("killed", sessionId);
     }
+  );
+
+  server.registerTool(
+    "steer",
+    {
+      description:
+        "Redirect an in-flight delegation by sessionId: message goes to agy as a new instruction for the running turn, and the delegate call returns the redirected turn's result. agy stops a running command to follow it, and finishes a reply it is writing first. Status: steered, not-ready (the delegation has not sent its prompt yet; retry), not-running (turn already ended — resume instead), not-found (id not in this process's recent session history).",
+      inputSchema: {
+        sessionId: z.string(),
+        message: z.string().trim().min(1, "message must not be blank").describe("The new instruction, sent as written."),
+      },
+      annotations: {
+        title: "Steer Antigravity delegation",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ sessionId, message }) => statusResult(steerSession(inFlight, seenSessions, sessionId, message), sessionId)
   );
 
   server.registerTool(

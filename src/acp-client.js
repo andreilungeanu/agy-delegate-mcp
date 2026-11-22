@@ -36,6 +36,9 @@ export class AcpClient extends EventEmitter {
     // Sessions opened on this process, which a graceful stop closes.
     /** @type {Set<string>} */
     this._sessions = new Set();
+    this._steerable = false;
+    /** @type {Promise<any>[]} */
+    this._steers = [];
   }
 
   // stderr is captured but does not count as activity: the supervisor measures ACP frames, and
@@ -169,6 +172,21 @@ export class AcpClient extends EventEmitter {
   setConfigOption(sessionId, configId, value) { return this.peer.request("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
   setMode(sessionId, modeId) { return this.peer.request("session/set_mode", { sessionId, modeId }); }
   prompt(sessionId, blocks) { return this.peer.request("session/prompt", { sessionId, prompt: blocks }); }
+  // agy takes a session/prompt sent while a turn runs as a redirect of that turn: the prompt in
+  // flight settles at once with end_turn, and the new one settles when the redirected turn ends
+  // (measured, agy 1.5.14). The delegation opens this window only while its prompt runs, so a
+  // steer can neither precede the task nor land after the delegation has read its result.
+  acceptSteers(on) { this._steerable = on; }
+  steer(sessionId, text) {
+    if (!this._steerable || !this.peer) return false;
+    const reply = this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+    // The delegation awaits it; this keeps a rejection it never reaches from going unhandled.
+    reply.catch(() => {});
+    this._steers.push(reply);
+    return true;
+  }
+  hasSteer() { return this._steers.length > 0; }
+  takeSteer() { return this._steers.shift(); }
   // Recorded so a delegation waiting on a backgrounded command can stop waiting: after a cancel
   // agy closes the call without the usage_update that ends a continuation.
   cancel(sessionId) { this.cancelRequested = true; this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }

@@ -171,7 +171,7 @@ test("server advertises instructions, output schemas, and conservative tool anno
     assert.match(instructions, /filesReportedByEditTools/);
     const listed = await client.listTools();
     const tools = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
-    assert.deepEqual(Object.keys(tools).sort(), ["cancel", "delegate", "doctor"]);
+    assert.deepEqual(Object.keys(tools).sort(), ["cancel", "delegate", "doctor", "steer"]);
     // The description is what a host reads immediately before calling, so it must not
     // reassert the workspace confinement the instructions just denied.
     assert.match(tools.delegate.description, /every permission the agent requests, in any mode and anywhere on disk/i);
@@ -198,6 +198,12 @@ test("server advertises instructions, output schemas, and conservative tool anno
     assert.equal(tools.delegate.outputSchema, undefined);
     assert.equal(tools.doctor.outputSchema, undefined);
     assert.equal(tools.cancel.outputSchema, undefined);
+    assert.equal(tools.steer.outputSchema, undefined);
+    for (const status of ["steered", "not-ready", "not-running", "not-found"]) {
+      assert.ok(tools.steer.description.includes(status), `steer description names ${status}`);
+    }
+    assert.equal(tools.steer.annotations.destructiveHint, true);
+    assert.equal(tools.steer.annotations.idempotentHint, false);
     // With the schema gone, the description is the only published source of cancel's statuses.
     for (const status of ["cancelled", "killed", "not-running", "not-found"]) {
       assert.ok(tools.cancel.description.includes(status), `cancel description names ${status}`);
@@ -1015,6 +1021,46 @@ test("cancel with force returns as soon as the turn settles, not after the whole
     assert.equal(payload(cancelRes).status, "cancelled");
     assert.ok(elapsed < 1000, `force cancel took ${elapsed} ms for a turn that settled at once`);
     await delegateP;
+  } finally {
+    await client.close();
+  }
+});
+
+test("steer tool forwards the message to a running delegation and reports each status", async () => {
+  let accepting = false;
+  const received = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let sessionReady;
+  const ready = new Promise((r) => { sessionReady = r; });
+  const runDelegate = async ({ onSessionReady }) => {
+    onSessionReady("sess-steer", {
+      cancel: async () => {},
+      steer: (sid, text) => { if (!accepting) return false; received.push([sid, text]); return true; },
+    });
+    sessionReady();
+    await gate;
+    return { result: "steered result", sessionId: "sess-steer" };
+  };
+  const server = buildServer({ runDelegate });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  const steer = async (sessionId, message = "go left") =>
+    payload(await client.callTool({ name: "steer", arguments: { sessionId, message } })).status;
+  try {
+    assert.equal(await steer("never-seen"), "not-found");
+    const delegateP = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "long task" } });
+    await ready;
+    assert.equal(await steer("sess-steer"), "not-ready", "a delegation still setting up takes no steer");
+    accepting = true;
+    assert.equal(await steer("sess-steer"), "steered");
+    assert.deepEqual(received, [["sess-steer", "go left"]]);
+    release();
+    assert.equal(payload(await delegateP).result, "steered result");
+    assert.equal(await steer("sess-steer"), "not-running");
+    const blank = await client.callTool({ name: "steer", arguments: { sessionId: "sess-steer", message: "   " } });
+    assert.equal(blank.isError, true);
   } finally {
     await client.close();
   }
