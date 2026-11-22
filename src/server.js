@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runDelegate as runDelegateDefault } from "./delegate.js";
+import { runDelegate as runDelegateDefault, draining as drainingDefault } from "./delegate.js";
 import { runDoctor as runDoctorDefault } from "./doctor.js";
 import { VERSION, readPackageVersion } from "./version.js";
 import { DETACHED } from "./proc.js";
@@ -417,6 +417,7 @@ if (process.argv[1]) {
 // Kill what is still running, then exit, on any way the host has of going away.
 export function installSignalCleanup(map, {
   pending = new Set(),
+  draining = drainingDefault,
   exit = (code) => process.exit(code),
   setExitCode = (code) => { process.exitCode = code; },
   schedule = (fn) => setImmediate(fn),
@@ -440,6 +441,9 @@ export function installSignalCleanup(map, {
     // Delegations still inside their handshake. The agent is already running for these, and this
     // is the only place it is reachable from — they have no session id to be keyed under yet.
     for (const handle of pending) dispatch(handle);
+    // Delegations that already returned and left their agent in a graceful stop. stop() here is a
+    // force stop, which ends that grace and kills.
+    for (const client of draining) dispatch({ client });
     // On Windows the kill is a separate taskkill process: exiting before it walks the tree
     // orphans everything below the shell wrapper — the ps1 launcher and the versioned agent
     // were measured surviving the server's exit. stop() bounds itself (observed exit or its

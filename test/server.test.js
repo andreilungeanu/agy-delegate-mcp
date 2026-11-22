@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { AcpClient } from "../src/acp-client.js";
+import { isChildAlive } from "../src/proc.js";
 import { runDelegate as realRunDelegate } from "../src/delegate.js";
 import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup } from "../src/server.js";
 
@@ -1063,5 +1064,36 @@ test("steer tool forwards the message to a running delegation and reports each s
     assert.equal(blank.isError, true);
   } finally {
     await client.close();
+  }
+});
+
+// A delegation hands its agent to a graceful stop and returns, which drops it from inFlight.
+// A shutdown inside that grace found nothing to stop and exited, leaving an agent that ignores
+// close and EOF running.
+test("shutdown stops an agent still in its graceful stop after the delegation returned", async () => {
+  const client = stubClientFactory("close-ignoring-stub.js")();
+  await client.start();
+  await client.initialize();
+  await client.newSession(process.cwd());
+  const draining = new Set([client]);
+  client.stop({ graceMs: 10000 });
+  const stdin = new EventEmitter();
+  let exitedAt;
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  try {
+    const started = Date.now();
+    installSignalCleanup(new Map(), { draining, exit: () => { exitedAt = Date.now(); }, stdin });
+    stdin.emit("end");
+    for (let i = 0; i < 200 && exitedAt === undefined; i++) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(exitedAt !== undefined, "shutdown never exited");
+    assert.ok(!isChildAlive(client.child), "the agent must be dead when the server exits");
+    assert.ok(exitedAt - started < 3000, `shutdown took ${exitedAt - started} ms`);
+  } finally {
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+    if (isChildAlive(client.child)) await client.stop();
   }
 });

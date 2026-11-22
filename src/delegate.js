@@ -15,6 +15,10 @@ import { effortSettings, optionsFrom, resolveEffort, allowedValues } from "./mod
 import { transcriptFrames } from "./jsonrpc.js";
 
 export const DEFAULT_HANDSHAKE_MS = 60000;
+
+// Agents whose delegation has returned but whose graceful stop is still running. The server's
+// inFlight no longer holds them, so shutdown reads this set too.
+export const draining = new Set();
 export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
 
 // The bridge's modes onto agy's. agy has no ask mode: ask runs in default with ASK_PREAMBLE
@@ -637,6 +641,8 @@ export async function runDelegate({
     // much as failure — would pay that before returning. Nothing here reads whether it landed.
     // Graceful first: agy closes the session and its conversation database, and a wedged agent
     // is still killed once graceMs runs out.
-    Promise.resolve(client.stop({ graceMs: GRACEFUL_STOP_MS })).catch(() => {});
+    // Kept in draining until it settles, so a shutdown inside the grace still reaches the agent.
+    draining.add(client);
+    Promise.resolve(client.stop({ graceMs: GRACEFUL_STOP_MS })).catch(() => {}).finally(() => draining.delete(client));
   }
 }

@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient } from "../src/acp-client.js";
-import { runDelegate as rawRunDelegate, readUsage } from "../src/delegate.js";
+import { runDelegate as rawRunDelegate, readUsage, draining } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
@@ -169,10 +169,13 @@ test("a finished delegation lets the agent close its session and exit by itself"
     clientFactory: () => (client = fakeFactory()),
   });
   assert.equal(out.result, "done");
+  assert.ok(draining.has(client), "shutdown must still be able to reach the agent during its grace");
   const { code, signal } = client.child.exitCode !== null || client.child.signalCode !== null
     ? { code: client.child.exitCode, signal: client.child.signalCode }
     : await new Promise((resolve) => client.once("exit", resolve));
   assert.deepEqual({ code, signal }, { code: 0, signal: null }, "the agent must exit on its own, not be killed");
+  for (let i = 0; i < 100 && draining.has(client); i++) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(!draining.has(client), "a settled stop leaves the draining set");
 });
 
 test("usage keeps only ACP's numeric token fields, and context only a complete usage_update", async () => {
