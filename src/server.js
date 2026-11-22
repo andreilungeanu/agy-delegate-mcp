@@ -175,6 +175,8 @@ export function steerSession(map, seen, sessionId, message) {
   if (!handles || handles.size === 0) return seen.has(sessionId) ? "not-running" : "not-found";
   const statuses = new Set();
   for (const handle of handles) {
+    // A turn that has ended is only tearing down, whatever state its window was left in.
+    if (handle.ended) { statuses.add("not-running"); continue; }
     try { statuses.add(handle.client.steer?.(sessionId, message) ?? "not-running"); } catch { statuses.add("not-running"); }
   }
   for (const status of ["steered", "not-ready"]) if (statuses.has(status)) return status;

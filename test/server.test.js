@@ -1230,3 +1230,8 @@ test("cancel and steer reject a blank sessionId, and trim one with stray whitesp
     await client.close();
   }
 });
+
+test("steer reports not-running for a delegation whose turn has ended, whatever its client says", () => {
+  const map = new Map([["sess-ending", new Set([{ ended: true, client: { steer: () => "not-ready" } }])]]);
+  assert.equal(steerSession(map, new Set(["sess-ending"]), "sess-ending", "go"), "not-running");
+});
