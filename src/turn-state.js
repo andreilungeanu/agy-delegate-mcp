@@ -57,7 +57,8 @@ function freshFields() {
     toolNames: new Map(),
     // The one-line label per call id, so a warning names the call still open, not the newest one.
     toolLabels: new Map(),
-    // Set by a usage_update, cleared by any other frame: agy closes every turn with one.
+    // Set by a usage_update, cleared by any other frame: agy closes a completed turn, prompted or
+    // not, with one.
     usageAfterActivity: false,
     // The newest usage_update's { used, size }; unlike the reply's usage it covers a continuation.
     contextUsage: undefined,

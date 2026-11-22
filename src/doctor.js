@@ -151,9 +151,9 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
     return { ok: false, error: err?.message || String(err) };
   } finally {
     clearTimeout(timer);
-    // Awaited, so doctor returns after its agent has exited. Graceful, closing the handshake's
-    // session; after a timeout or abort it joins the kill already started. The abort listener stays
-    // on through the close, so an abort there forces the kill.
+    // Awaited, so doctor returns once its agent is stopped or the stop's deadline passed. Graceful,
+    // closing the handshake's session; after a timeout or abort it joins the kill already started.
+    // The abort listener stays on through the close, so an abort there forces the kill.
     try { await Promise.resolve(client.stop({ graceMs: signal?.aborted ? 0 : GRACEFUL_STOP_MS })); } catch {}
     if (onAbort) signal?.removeEventListener("abort", onAbort);
   }

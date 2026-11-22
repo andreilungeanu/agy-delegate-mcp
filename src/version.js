@@ -11,8 +11,9 @@ function readVersion() {
 // Captured once, for the ACP and MCP identity sent at connect.
 export const VERSION = readVersion();
 
-// Read fresh for doctor: /reload-plugins does not restart the server, so the constant goes stale
-// after an in-place upgrade.
+// Read fresh for doctor: /reload-plugins does not restart the server, so after an in-place upgrade
+// the constant is stale. doctor then reports the installed version; the running server still runs
+// the old code until restarted.
 export function readPackageVersion() {
   try {
     return readVersion();

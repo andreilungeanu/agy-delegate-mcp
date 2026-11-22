@@ -590,7 +590,8 @@ export async function runDelegate({
     // resultSource appears only as a caveat; resumed only when a resume took.
     if (resultSource !== "post-tool" && resultSource !== "tool-free-stream") out.resultSource = resultSource;
     if (!!resumeSessionId && sessionId === resumeSessionId) out.resumed = true;
-    // Present when the served model differs from the requested one, so always when model was omitted.
+    // Present when the served model differs from the requested one, so whenever model was omitted
+    // and agy reports one.
     if (servedModel !== undefined && servedModel !== model) out.effectiveModel = servedModel;
     if (effectiveEffort !== undefined) out.effectiveEffort = effectiveEffort;
     if (stopReason !== undefined) out.stopReason = stopReason;
@@ -678,10 +679,11 @@ export async function runDelegate({
     signal?.removeEventListener("abort", onAbort);
     client.off?.("cancel", onCancel);
     try { supervisor.finish(); } catch {}
-    // Awaited, so agy has exited when the caller gets the result; otherwise agy still holds the
-    // workspace as its cwd (deleting it fails with EBUSY on Windows). The handle stays registered
-    // meanwhile, so force cancel and shutdown can cut the grace short. Graceful after a completed
-    // turn, so agy closes its conversation database; a stall, abort or exit is killed at once.
+    // Awaited, so agy has exited when the caller gets the result, or a warning says the exit was not
+    // seen; otherwise agy still holds the workspace as its cwd (deleting it fails with EBUSY on
+    // Windows). The handle stays registered meanwhile, so force cancel and shutdown can cut the grace
+    // short. Graceful after a completed turn, so agy closes its conversation database; a stall,
+    // abort or exit is killed at once.
     const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
     // A host abort during the close is still an abort: a force stop ends the grace and kills.
     const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };

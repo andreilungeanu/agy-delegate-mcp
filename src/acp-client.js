@@ -10,7 +10,8 @@ import { VERSION } from "./version.js";
 import { makeError } from "./errors.js";
 
 const STDERR_CAP = 64 * 1024;
-// How long stop() waits for the exit after the kill; it elapses only when the kill failed.
+// How long stop() waits for the exit and the tree kill; it elapses when the kill failed or the
+// tree walk is slow.
 const STOP_EXIT_TIMEOUT_MS = 2000;
 // How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
 export const GRACEFUL_STOP_MS = 2000;
@@ -82,7 +83,8 @@ export class AcpClient extends EventEmitter {
       }
     });
     this.child.stderr.on("error", () => {});
-    // A write after the agent is gone raises 'error'; unhandled, it takes down the server.
+    // A write after the agent is gone raises 'error' on stdin, and readline puts no handler on
+    // stdout; unhandled, either takes down the server.
     this.child.stdin.on("error", () => {});
     this.child.stdout.on("error", () => {});
     const emitExit = (code, signal) => {
@@ -186,9 +188,9 @@ export class AcpClient extends EventEmitter {
   }
   hasSteer() { return this._steers.length > 0; }
   takeSteer() { return this._steers.shift(); }
-  // Read by the background wait, which a cancelled turn's usage_update would not end, and closes
-  // the steer window: a later steer would restart the cancelled turn. delegate listens for the
-  // event to end its setup when no prompt has gone out.
+  // Read by the background wait: after a cancel agy closes the call without the usage_update that
+  // ends a continuation. Closes the steer window: a later steer would restart the cancelled turn.
+  // delegate listens for the event to end its setup when no prompt has gone out.
   cancel(sessionId) {
     this.cancelRequested = true;
     this._steerWindow = "closed";
