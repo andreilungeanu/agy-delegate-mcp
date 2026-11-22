@@ -563,10 +563,13 @@ export async function runDelegate({
       // delegation returns, so a backgrounded command stops with it.
       result = state.unfinishedToolText;
       resultSource = result ? "unfinished-tool" : "none";
-      const cause = backgroundWaited !== undefined && state.backgroundToolCalls().length
-        ? ` agy moved it to the background, and it was still running after the bridge waited ${fmtDuration(backgroundWaited)}`
-          + " (AGY_DELEGATE_BACKGROUND_WAIT_MS); it stops when the bridge stops agy."
-        : " agy is asking a question (ask_question), which a resume answers.";
+      // A refusal or output cap is not waited on, so a command can be open without a wait.
+      const cause = !state.backgroundToolCalls().length
+        ? " agy is asking a question (ask_question), which a resume answers."
+        : backgroundWaited !== undefined
+          ? ` agy moved it to the background, and it was still running after the bridge waited ${fmtDuration(backgroundWaited)}`
+            + " (AGY_DELEGATE_BACKGROUND_WAIT_MS); it stops when the bridge stops agy."
+          : ` agy ended the turn (${res?.stopReason}) with it still running; it stops when the bridge stops agy.`;
       protocolWarnings.push(
         `the turn ended with a tool call still running (${state.lastToolLabel ?? "unnamed tool"}).`
         + cause

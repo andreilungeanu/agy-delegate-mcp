@@ -1977,6 +1977,10 @@ test("only an end_turn with a tool still running waits for a background command"
   });
   assert.ok(Date.now() - started < 1000, `a refusal waited ${Date.now() - started} ms`);
   assert.equal(out.stopReason, "refusal");
+  // A command left open is not a question: the warning must not send the caller to answer one.
+  const warning = (out.protocolWarnings ?? []).find((w) => /tool call still running/.test(w)) ?? "";
+  assert.doesNotMatch(warning, /ask_question/);
+  assert.match(warning, /npm test/);
 });
 
 // One bound for the delegation: a steered turn that leaves the command running resumed the wait
