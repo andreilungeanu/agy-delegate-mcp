@@ -4,7 +4,8 @@ import process from "node:process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { spawnSync } from "node:child_process";
 import { AcpClient } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 
@@ -475,4 +476,25 @@ test("start() runs the agent in the cwd it was given", async () => {
   await exited;
   assert.equal(realpathSync(client.stderrBuffer), realpathSync(dir));
   await client.stop();
+});
+
+// Node 24 deprecates args passed alongside shell: true (DEP0190) and prints a warning on the
+// server's stderr; Node concatenates them unescaped either way. Run in a child process so the
+// warning, emitted once per process, is not swallowed by an earlier spawn in this one.
+test("spawning through a shell raises no DEP0190 warning", () => {
+  const acp = pathToFileURL(fileURLToPath(new URL("../src/acp-client.js", import.meta.url))).href;
+  const doctor = pathToFileURL(fileURLToPath(new URL("../src/doctor.js", import.meta.url))).href;
+  const stub = fileURLToPath(new URL("./fixtures/silent-stub.js", import.meta.url));
+  const script = `
+    const { AcpClient } = await import(${JSON.stringify(acp)});
+    const { probeAgentVersion } = await import(${JSON.stringify(doctor)});
+    const spec = { command: ${JSON.stringify(process.execPath)}, args: [${JSON.stringify(stub)}], options: { shell: true } };
+    const client = new AcpClient({ spawnSpec: spec });
+    await client.start();
+    await client.stop();
+    await probeAgentVersion({ command: ${JSON.stringify(process.execPath)}, args: [], options: { shell: true } });
+  `;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 20000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.doesNotMatch(child.stderr, /DEP0190/);
 });

@@ -30,6 +30,14 @@ export function resolveAcpSpawn() {
   return { command, args, options: { shell: process.platform === "win32" } };
 }
 
+// Node 24 deprecates args passed alongside shell: true (DEP0190) and warns on the server's stderr.
+// Through a shell Node joins command and args with spaces and hands cmd.exe that line, so the
+// line is built here the same way and passed alone: cmd.exe receives the same bytes.
+/** @returns {[string, string[]]} */
+export function spawnCommandLine(command, args, options) {
+  return options?.shell ? [[command, ...args].join(" "), []] : [command, args];
+}
+
 // Through a shell the spawn itself always succeeds: cmd.exe starts, fails to find the launcher and
 // exits 1 with a localized "is not recognized" line, so Node's spawn 'error' event never fires and
 // a missing agy reads as an agent crash. Resolving the launcher first is what lets that case be
