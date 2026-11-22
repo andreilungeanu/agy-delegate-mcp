@@ -1812,3 +1812,27 @@ test("a steer agy rejects leaves the turn's own result, with the rejection in pr
   assert.deepEqual(out.usage, { scope: "turn", inputTokens: 5, totalTokens: 5 });
   assert.ok(out.protocolWarnings?.some((w) => /steer was rejected/.test(w) && /steer rejected/.test(w)), JSON.stringify(out.protocolWarnings));
 });
+
+test("in ask mode a steer carries the same read-only instruction as the prompt", async () => {
+  let client;
+  let steered;
+  const prev = process.env.AGY_DELEGATE_TRANSCRIPT;
+  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
+  try {
+    await runDelegate({
+      spec: "STEERABLE question", mode: "ask", workspace: process.cwd(),
+      clientFactory: () => (client = fakeFactory()),
+      onSessionReady: (sid) => { steered = steerWhenOpen(() => client, sid, "look at b.js instead"); },
+    });
+    await steered;
+  } finally {
+    if (prev === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
+    else process.env.AGY_DELEGATE_TRANSCRIPT = prev;
+  }
+  const texts = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line))
+    .filter((f) => f.method === "session/prompt").map((f) => f.params.prompt[0].text);
+  assert.equal(texts.length, 2);
+  const preamble = texts[0].split("\n\n")[0];
+  assert.match(preamble, /Do not edit files/);
+  assert.equal(texts[1], `${preamble}\n\nlook at b.js instead`);
+});

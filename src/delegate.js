@@ -464,7 +464,7 @@ export async function runDelegate({
         const first = client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
         // Opened only once the prompt is on the wire (request writes synchronously): a steer
         // accepted earlier went out first, and agy took the brief as a redirect of it.
-        client.acceptSteers?.(true);
+        client.acceptSteers?.(true, mode === "ask" ? ASK_PREAMBLE : undefined);
         let turn = await first;
         const replies = [turn];
         // A steer settles the prompt before it at once with end_turn, so the turn ends only when

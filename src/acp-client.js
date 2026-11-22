@@ -176,10 +176,12 @@ export class AcpClient extends EventEmitter {
   // flight settles at once with end_turn, and the new one settles when the redirected turn ends
   // (measured, agy 1.5.14). The delegation opens this window only while its prompt runs, so a
   // steer can neither precede the task nor land after the delegation has read its result.
-  acceptSteers(on) { this._steerable = on; }
+  // prefix goes ahead of every steer's text, as ask mode's instruction goes ahead of the spec.
+  acceptSteers(on, prefix) { this._steerable = on; this._steerPrefix = prefix; }
   steer(sessionId, text) {
     if (!this._steerable || !this.peer) return false;
-    const reply = this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+    const body = this._steerPrefix ? `${this._steerPrefix}\n\n${text}` : text;
+    const reply = this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] });
     // The delegation awaits it; this keeps a rejection it never reaches from going unhandled.
     reply.catch(() => {});
     this._steers.push(reply);
