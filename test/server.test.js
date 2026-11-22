@@ -213,7 +213,6 @@ test("server advertises instructions, output schemas, and conservative tool anno
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     // SEP-973 icons on initialize must match the registry listing — HTTPS URLs, not file://.
-    // SDK 1.23.0 (the declared minimum) strips `theme` when parsing initialize; newer SDKs keep it.
     const registry = JSON.parse(readFileSync(new URL("../server.json", import.meta.url), "utf8"));
     const advertised = client.getServerVersion();
     assert.equal(advertised.name, "agy-delegate-mcp");
@@ -224,7 +223,7 @@ test("server advertises instructions, output schemas, and conservative tool anno
       assert.equal(icon.src, listed.src);
       assert.equal(icon.mimeType, listed.mimeType);
       assert.deepEqual(icon.sizes, listed.sizes);
-      if (icon.theme !== undefined) assert.equal(icon.theme, listed.theme);
+      assert.equal(icon.theme, listed.theme);
     }
     // Assert the invariants a host cannot infer, not the prose carrying them: hosts that
     // never load the skill see only this string.
@@ -238,8 +237,6 @@ test("server advertises instructions, output schemas, and conservative tool anno
     // The description is what a host reads immediately before calling, so it must not
     // reassert the workspace confinement the instructions just denied.
     assert.match(tools.delegate.description, /every permission the agent requests, in any mode and anywhere on disk/i);
-    // The bridge implements no elicitation path, so the description must teach
-    // prose-question → resume.
     assert.match(tools.delegate.description, /clarifying questions arrive in questions.*resumeSessionId/i);
     assert.ok(!/uses MCP elicitation/i.test(tools.delegate.description));
     assert.match(tools.delegate.description, /Leave model and effort unset unless the user explicitly asks/);

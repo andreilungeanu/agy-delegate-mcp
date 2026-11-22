@@ -507,7 +507,7 @@ export function installSignalCleanup(map, {
     const signals = /** @type {[NodeJS.Signals, number][]} */ ([["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]);
     for (const [signal, code] of signals) process.on(signal, () => shutdown(code, true));
   }
-  // A stdio host shuts down by closing stdin, which the SDK transport does not watch.
+  // A stdio host shuts down by closing stdin; the SDK closes its transport but does not stop agy.
   stdin.on("end", () => shutdown(0));
 }
 

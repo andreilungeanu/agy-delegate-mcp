@@ -197,8 +197,7 @@ export function readUsage(raws) {
   return { scope: "turn", ...Object.fromEntries(fields.map((k) => [k, reported.reduce((sum, raw) => sum + (isTokenCount(raw[k]) ? raw[k] : 0), 0)])) };
 }
 
-// Sized for every delegation result in a conversation: the newest commands, where a test run
-// usually lands, plus older ones that failed.
+// The newest commands, where a test run usually lands, plus older ones that failed.
 export const RECENT_COMMANDS = 8;
 export const OLDER_FAILED_COMMANDS = 5;
 const MAX_COMMAND_CHARS = 150;

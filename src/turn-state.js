@@ -190,9 +190,8 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
       return !state.sawToolCall || (state.collectingPostToolResult && state.activeToolCalls.size === 0);
     },
 
-    // Merges one tool_call or tool_call_update frame into its call's record. A re-sent non-terminal
-    // status does not reopen a finished call; a fresh tool_call for its id is a new call (agy reusing
-    // the id), so the finished record keeps its place under a key of its own.
+    // Merges a frame into its call's record. A fresh tool_call for a finished id is a new call (agy
+    // reusing the id); the finished record keeps its place under a key of its own.
     recordToolCall(up, isArtifact) {
       const id = up?.toolCallId;
       if (id == null) return;
