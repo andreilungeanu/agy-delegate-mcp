@@ -1,8 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">Antigravity Delegate — light</title>
-  <desc id="desc">An original geometric A with a floating coral arrow as its crossbar. An opening in the right leg lets the arrow hand work onward.</desc>
-  <!-- Original letterform drawn from geometric strokes, with a detached hand-off crossbar. -->
+  <desc id="desc">A three-tone coral A with a rounded crown, straight flanks, and flared, flat-cut feet around a crossbar-free arch, docked over a dark grey terminal with a prompt and underscore cursor on a cream rounded square.</desc>
   <rect width="1024" height="1024" rx="224" fill="#F4EFE4"/>
-  <path d="M244 792L479 252Q512 180 545 252L622 430M728 672L780 792" fill="none" stroke="#41434C" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M430 584H730M662 516L730 584L662 652" fill="none" stroke="#FF6B6B" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="190" y="390" width="644" height="440" rx="64" fill="none" stroke="#41434C" stroke-width="44"/>
+  <path d="M320 540 L400 605 L320 670" fill="none" stroke="#41434C" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="452" y1="670" x2="562" y2="670" stroke="#41434C" stroke-width="40" stroke-linecap="round"/>
+  <!-- Clear the terminal rim behind both legs and the open counter. -->
+  <path d="M396 339 H628 Q648 404 688 466 H336 Q376 404 396 339 Z"
+        fill="#F4EFE4" stroke="#F4EFE4" stroke-width="48" stroke-linejoin="round"/>
+  <g>
+    <clipPath id="a-silhouette">
+      <path d="M512 142 C550 142 574 167 591 216 L628 339
+               Q648 404 688 466 H620
+               C593 426 577 381 558 351 C545 330 532 318 512 318
+               C492 318 479 330 466 351 C447 381 431 426 404 466
+               H336 Q376 404 396 339 L433 216
+               C450 167 474 142 512 142 Z"/>
+    </clipPath>
+    <g clip-path="url(#a-silhouette)">
+      <rect x="320" y="120" width="384" height="360" fill="#FF6B6B"/>
+      <rect x="512" y="120" width="192" height="360" fill="#E14F4A"/>
+      <path d="M320 120 H704 V205 L512 284 L320 205 Z" fill="#FF8E7E"/>
+      <path d="M320 205 L512 284 L704 205 M512 284 V480"
+            fill="none" stroke="#F4EFE4" stroke-width="24" stroke-linejoin="round"/>
+    </g>
+  </g>
 </svg>
