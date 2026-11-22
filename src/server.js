@@ -337,13 +337,12 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         if (cut.size === live.length || Date.now() >= graceEnds) break;
         await new Promise((r) => setTimeout(r, Math.min(50, Math.max(1, graceEnds - Date.now()))));
       }
-      await Promise.all(closing);
-      // A snapshot, so a resume registering during teardown is not swept from the map.
+      // Classified the moment the grace ends and killed alongside the closes, not after them: a slow
+      // close would delay the kill, and a turn ending meanwhile would be reported killed. A snapshot,
+      // so a resume registering during teardown is not swept from the map.
       const toKill = live.filter((handle) => !cut.has(handle));
+      const [observed] = await Promise.all([Promise.all(toKill.map(stopQuietly)), Promise.all(closing)]);
       if (toKill.length === 0) return statusResult("cancelled", sessionId);
-      const observed = await Promise.all(
-        toKill.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false))
-      );
       // "killed" needs an observed exit; without one the handles stay and force can be retried.
       if (!observed.every(Boolean)) return statusResult("cancelled", sessionId);
       for (const handle of toKill) unregisterInFlight(inFlight, sessionId, handle);

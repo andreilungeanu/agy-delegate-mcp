@@ -1379,3 +1379,46 @@ test("a second signal kills the agents before exiting", { skip: process.platform
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The kill for a turn that ignored the cancel waited behind the other turns' closes, so it came
+// late, and a turn that finished on its own meanwhile was reported killed.
+test("force cancel kills a turn that ignored it without waiting for another turn's slow close", async () => {
+  let ready = 0;
+  let bothReady;
+  const allReady = new Promise((r) => { bothReady = r; });
+  const stoppedAt = {};
+  const makeRun = (name) => async ({ onSessionReady, onTurnEnd }) => {
+    let settle;
+    const settled = new Promise((r) => { settle = r; });
+    onSessionReady("sess-slow", {
+      // A settles on the cancel and then takes 600 ms to close; B ignores the cancel.
+      cancel: async () => { if (name === "A") settle(); },
+      stop: () => {
+        stoppedAt[name] ??= Date.now();
+        settle();
+        return name === "A" ? new Promise((r) => setTimeout(() => r(true), 600)) : true;
+      },
+    });
+    if (++ready === 2) bothReady();
+    await settled;
+    onTurnEnd();
+    return { result: name, sessionId: "sess-slow" };
+  };
+  let call = 0;
+  const runDelegate = (opts) => makeRun(call++ === 0 ? "A" : "B")(opts);
+  const server = buildServer({ runDelegate, forceGraceMs: 100 });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const a = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "a" } });
+    const b = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "b" } });
+    await allReady;
+    const started = Date.now();
+    await client.callTool({ name: "cancel", arguments: { sessionId: "sess-slow", force: true } });
+    assert.ok(stoppedAt.B - started < 400, `B was killed ${stoppedAt.B - started} ms after the cancel`);
+    await Promise.all([a, b]);
+  } finally {
+    await client.close();
+  }
+});
