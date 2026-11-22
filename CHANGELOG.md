@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-22
+
+### Added
+
+- **`steer`** tool: sends a new instruction into a running delegation; the pending `delegate` call
+  returns the redirected turn. Needs a host that can call a tool while `delegate` runs.
+- `usage` (the turn's token counts) and `context` (`{used, size}` of the context window) in the
+  result.
+
+### Changed
+
+- A delegation returns once agy has exited. agy first gets up to 2 s to close its session and exit
+  by itself (about 0.4 s in practice), so its conversation database closes cleanly and the
+  workspace is free when the result arrives. A stall, abort, agent exit, `force` cancel or shutdown
+  still kills it at once.
+
 ## [1.3.0] - 2026-11-22
 
 ### Added

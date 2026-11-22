@@ -1,6 +1,6 @@
 {
   "name": "agy-delegate",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Delegate local coding work to Google Antigravity's CLI agent (agy) through MCP and ACP.",
   "author": {
     "name": "Andrei Lungeanu",
@@ -24,7 +24,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "npm:agy-delegate-mcp@1.3.0"
+        "npm:agy-delegate-mcp@1.4.0"
       ],
       "tool_timeout_sec": 21660
     }
