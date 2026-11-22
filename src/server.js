@@ -458,7 +458,13 @@ export function installSignalCleanup(map, {
     const stopOnce = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
     const dispatch = (handle) => {
       dispatched.add(handle);
-      try { stops.push(stopOnce(handle).then((exited) => (exited === false ? stopOnce(handle) : exited))); } catch {}
+      try {
+        stops.push(stopOnce(handle).then((exited) => (exited === false ? stopOnce(handle) : exited)).then((exited) => {
+          // Its group is killed and its id may be reused: a second signal must not kill it again.
+          if (exited !== false) dispatched.delete(handle);
+          return exited;
+        }));
+      } catch {}
     };
     for (const handles of map.values()) for (const handle of handles) dispatch(handle);
     // Delegations still in their handshake, with no session id yet.

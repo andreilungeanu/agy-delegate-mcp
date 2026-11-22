@@ -1483,3 +1483,29 @@ test("a second signal kills every agent shutdown dispatched to, even one no long
     }
   }
 });
+
+// A handle whose stop had confirmed the exit was still sent SIGKILL by the second signal: its group
+// was already killed, and the id may since belong to another group.
+test("a second signal skips an agent whose stop already confirmed its exit", { skip: process.platform === "win32" }, async () => {
+  const killed = [];
+  const done = { client: { stop: async () => true, killNow: () => killed.push("done") } };
+  const hung = { client: { stop: () => new Promise(() => {}), killNow: () => killed.push("hung") } };
+  const map = new Map([["sess-1", new Set([done, hung])]]);
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    installSignalCleanup(map, { exit: () => {}, setExitCode: () => {}, stdin: new EventEmitter() });
+    process.emit("SIGTERM");
+    // The delegation unregisters its handle once its stop returns.
+    await flushExit();
+    map.get("sess-1").delete(done);
+    process.emit("SIGINT");
+    assert.deepEqual(killed, ["hung"]);
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+  }
+});
