@@ -616,7 +616,7 @@ export async function runDelegate({
   } catch (err) {
     // A caller's cancel before the prompt is a cancelled result, even if a config call then failed.
     if (cancelledInSetupByCaller && sessionId) {
-      out = { result: "", sessionId, stopReason: "cancelled" };
+      out = { result: "", sessionId, resultSource: "none", stopReason: "cancelled" };
       if (resumeSessionId && sessionId === resumeSessionId) out.resumed = true;
       if (resumeError) out.protocolWarnings = [`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`];
       return out;

@@ -2170,6 +2170,8 @@ test("a cancel during setup ends a delegation whose config call hangs", async ()
   });
   assert.ok(Date.now() - started < 3000, `the cancelled setup took ${Date.now() - started} ms`);
   assert.equal(out.stopReason, "cancelled");
+  // An empty result is labelled as one, as on every other path.
+  assert.equal(out.resultSource, "none");
 });
 
 test("a config call agy rejects after a cancel reports the delegation cancelled", async () => {
