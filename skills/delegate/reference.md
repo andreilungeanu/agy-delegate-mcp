@@ -32,7 +32,7 @@ retry with the returned `resumeSessionId`, the complete original `spec`, and a l
 | Field | Description |
 | ----- | ----------- |
 | `result` | Final agent text: the complete stream for tool-free turns, or only text emitted after the final tool completes. Empty when no final message was emitted. |
-| `resultSource` | Present only as a caveat on `result`; **absent on the happy path**, where `result` is simply the answer. `"pre-tool-fallback"` (no final message closed the turn; `result` is the last message before the agent's final tool call — read `protocolWarnings` before trusting it), `"unfinished-tool"` (the turn ended with a tool call still running: a command agy moved to the background was still running when the background wait ran out or a refusal or output cap ended the turn, and it stopped with agy, or agy asked a question through `ask_question`, which a resume answers; `result` is agy's message from while it ran, and `protocolWarnings` names the tool) or `"none"` (no message; `result` is empty). A refusal with no tool left running is not a caveat here — its text is the `result`; judge by the diff. |
+| `resultSource` | Present only as a caveat on `result`; **absent on the happy path**, where `result` is simply the answer. `"pre-tool-fallback"` (no final message closed the turn; `result` is the last message before the agent's final tool call — read `protocolWarnings` before trusting it), `"unfinished-tool"` (the turn ended with a tool call still running: a command agy moved to the background was still running when the background wait ran out, a cancel arrived, or a refusal or output cap ended the turn, and it stopped with agy, or agy asked a question through `ask_question`, which a resume answers; `result` is agy's message from while it ran, and `protocolWarnings` names the tool) or `"none"` (no message; `result` is empty). A refusal with no tool left running is not a caveat here — its text is the `result`; judge by the diff. |
 | `stopReason` | Present only when it is not the ordinary `end_turn` — a refusal, a cancel, or an output cap. Absence means the turn ended normally. A cancel before the prompt was sent sends no prompt: `cancelled` with an empty `result`. |
 | `sessionId` | Session id for resume. |
 | `effectiveModel` | The base model id agy ran, present when it differs from `model` and always when `model` was omitted. |
@@ -106,9 +106,11 @@ is recorded and it returns nothing at all.
 
 Cross-process resume via `session/resume`, which restores the conversation without replaying it.
 agy reopens a resumed session at its default model, thinking level and mode, so the bridge sends
-`model`, `effort` and `mode` again on every resume. A resume that leaves `model` out uses the model
-last set on that session by this server process; one that leaves `effort` out uses the effort last
-set, unless `model` changes. A restarted server has no record and leaves agy's defaults; a resume that then omits `model` says so in `protocolWarnings`. An id agy does not list starts a fresh
+`mode` again on every resume, and `model` and `effort` whenever it has them. A resume that leaves
+`model` out uses the model this server process recorded for that session (the one agy ran when
+`model` or `effort` was last set); one that leaves `effort` out uses the effort last set, unless
+`model` changes. A server with no record of the session (restarted, or not the one that ran it)
+leaves agy's defaults; a resume that then omits `model` says so in `protocolWarnings`. An id agy does not list starts a fresh
 session with a `protocolWarnings` entry; any other resume failure is `resume-failed` and starts
 nothing.
 
