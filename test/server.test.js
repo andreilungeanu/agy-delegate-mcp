@@ -760,7 +760,7 @@ test("installSignalCleanup stops registered agents, then exits", { skip: process
   const stopped = [];
   const exited = [];
   const map = new Map([["sess-1", new Set([{ client: { stop: () => { stopped.push("sess-1"); return Promise.resolve(true); } } }])]]);
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     installSignalCleanup(map, { exit: (code) => exited.push(code) });
     process.emit("SIGINT");
@@ -768,7 +768,7 @@ test("installSignalCleanup stops registered agents, then exits", { skip: process
     await flushExit();
     assert.deepEqual(exited, [130], "the handler must exit rather than swallow the signal");
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
@@ -787,7 +787,7 @@ test("installSignalCleanup waits for the kill to settle before exiting", async (
   const stop = new Promise((r) => { settle = r; });
   const map = new Map([["sess-1", new Set([{ client: { stop: () => { order.push("stop"); return stop; } } }])]]);
   const stdin = new EventEmitter();
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     installSignalCleanup(map, { exit: (code) => { order.push("exit"); exited.push(code); }, stdin });
     stdin.emit("end");
@@ -798,7 +798,7 @@ test("installSignalCleanup waits for the kill to settle before exiting", async (
     assert.deepEqual(order, ["stop", "exit"], "exit must follow the settled kill");
     assert.deepEqual(exited, [0]);
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
@@ -840,7 +840,7 @@ test("a stop that rejects on shutdown still exits and raises no unhandled reject
   process.on("unhandledRejection", onRejection);
   const map = new Map([["sess-1", new Set([{ client: { stop: () => Promise.reject(new Error("kill failed")) } }])]]);
   const stdin = new EventEmitter();
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     installSignalCleanup(map, { exit: (code) => exited.push(code), stdin });
     stdin.emit("end");
@@ -849,7 +849,7 @@ test("a stop that rejects on shutdown still exits and raises no unhandled reject
     assert.deepEqual(rejections, [], "the rejection must be observed, not unhandled");
   } finally {
     process.off("unhandledRejection", onRejection);
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
@@ -865,7 +865,7 @@ test("installSignalCleanup stops registered agents and exits when stdin closes",
   const exited = [];
   const map = new Map([["sess-1", new Set([{ client: { stop: () => { stopped.push("sess-1"); return Promise.resolve(true); } } }])]]);
   const stdin = new EventEmitter();
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     installSignalCleanup(map, { exit: (code) => exited.push(code), stdin });
     stdin.emit("end");
@@ -873,7 +873,7 @@ test("installSignalCleanup stops registered agents and exits when stdin closes",
     await flushExit();
     assert.deepEqual(exited, [0], "stdin EOF must exit rather than linger");
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
@@ -923,7 +923,7 @@ test("shutdown records the exit code before it waits, and leaves the kill's own 
   const stop = new Promise((r) => { settle = r; });
   const map = new Map([["sess-1", new Set([{ client: { stop: () => stop } }])]]);
   const stdin = new EventEmitter();
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     installSignalCleanup(map, {
       exit: () => order.push("exit"),
@@ -940,7 +940,7 @@ test("shutdown records the exit code before it waits, and leaves the kill's own 
     await flushExit();
     assert.deepEqual(order, ["scheduled", "exit"], "the exit must go through the scheduler");
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
@@ -987,7 +987,7 @@ test("a shutdown during the handshake still kills the agent it spawned", async (
   assert.equal(pending.size, 1, "the handshake-stage delegation must still be reachable");
 
   const stdin = new EventEmitter();
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     installSignalCleanup(inFlight, { pending, exit: () => {}, setExitCode: () => {}, stdin });
     stdin.emit("end");
@@ -996,7 +996,7 @@ test("a shutdown during the handshake still kills the agent it spawned", async (
     while (Date.now() < deadline && alive()) await new Promise((r) => setTimeout(r, 50));
     assert.equal(alive(), false, "the agent spawned during the handshake outlived the shutdown");
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
@@ -1087,7 +1087,7 @@ test("shutdown kills an agent that is in its graceful stop instead of waiting ou
   client.stop({ graceMs: 10000 });
   const stdin = new EventEmitter();
   let exitedAt;
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     const started = Date.now();
     installSignalCleanup(map, { exit: () => { exitedAt = Date.now(); }, stdin });
@@ -1097,7 +1097,7 @@ test("shutdown kills an agent that is in its graceful stop instead of waiting ou
     assert.ok(!isChildAlive(client.child), "the agent must be dead when the server exits");
     assert.ok(exitedAt - started < 3000, `shutdown took ${exitedAt - started} ms`);
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
