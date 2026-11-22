@@ -96,6 +96,7 @@ function steerTurn(m) {
     fail(held, -32603, "Internal error: first prompt failed");
     held = null;
     setTimeout(() => {
+      update(sid, { sessionUpdate: "tool_call_update", toolCallId: "c-hold", status: "failed" });
       update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "STEERED after failure" } });
       reply(m, { stopReason: "end_turn" });
     }, 20);

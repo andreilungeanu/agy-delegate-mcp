@@ -488,11 +488,13 @@ test("spawning through a shell raises no DEP0190 warning", () => {
   const script = `
     const { AcpClient } = await import(${JSON.stringify(acp)});
     const { probeAgentVersion } = await import(${JSON.stringify(doctor)});
-    const spec = { command: ${JSON.stringify(process.execPath)}, args: [${JSON.stringify(stub)}], options: { shell: true } };
+    // Quoted for cmd.exe, which splits an unquoted path at its first space.
+    const spec = { command: ${JSON.stringify(`"${process.execPath}"`)}, args: [${JSON.stringify(`"${stub}"`)}], options: { shell: true } };
     const client = new AcpClient({ spawnSpec: spec });
     await client.start();
     await client.stop();
-    await probeAgentVersion({ command: ${JSON.stringify(process.execPath)}, args: [], options: { shell: true } });
+    const probe = await probeAgentVersion({ command: ${JSON.stringify(`"${process.execPath}"`)}, args: [], options: { shell: true } });
+    if (!probe.version) throw new Error("version probe failed: " + JSON.stringify(probe));
   `;
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 20000 });
   assert.equal(child.status, 0, child.stderr);

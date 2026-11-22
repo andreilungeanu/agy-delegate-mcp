@@ -1957,6 +1957,7 @@ test("a first prompt that fails while a steer is queued returns the steered turn
   });
   await steered;
   assert.equal(out.result, "STEERED after failure");
+  assert.equal(out.resultSource, undefined, JSON.stringify(out.protocolWarnings));
 });
 
 // agy moves a command to the background with end_turn (measured). A refusal or an output cap
