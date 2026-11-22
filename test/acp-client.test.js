@@ -243,6 +243,29 @@ test("a graceful stop closes the agent's sessions and lets it exit by itself", a
   assert.deepEqual(sent.find((f) => f.method === "session/close")?.params, { sessionId });
 });
 
+// The bridge sends no appended system prompt today; the option stays for a caller that needs it.
+test("newSession sends an appended system prompt only when asked for one", async () => {
+  const prev = process.env.AGY_DELEGATE_TRANSCRIPT;
+  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
+  const client = new AcpClient({ spawnSpec: fakeSpawn() });
+  try { await client.start(); }
+  finally {
+    if (prev === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
+    else process.env.AGY_DELEGATE_TRANSCRIPT = prev;
+  }
+  try {
+    await client.initialize();
+    await client.newSession(process.cwd());
+    await client.newSession(process.cwd(), { appendSystemPrompt: "Be brief." });
+    const opens = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line))
+      .filter((f) => f.method === "session/new");
+    assert.equal(opens[0].params._meta, undefined);
+    assert.deepEqual(opens[1].params._meta, { antigravity: { systemPrompt: { append: "Be brief." } } });
+  } finally {
+    await client.stop();
+  }
+});
+
 test("a graceful stop still kills an agent that ignores session/close and EOF", async () => {
   const client = new AcpClient({
     spawnSpec: {
