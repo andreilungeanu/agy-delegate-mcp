@@ -419,7 +419,6 @@ export async function runDelegate({
       state.recordToolCall(up, isArtifact);
       if (up.sessionUpdate === "tool_call") {
         state.startTool(up.toolCallId, up.status, up.name ?? up.title);
-        if (state.isQuestion(up.toolCallId)) state.recordQuestions(up.toolCallId, (up.rawInput ?? up.args)?.questions);
         const label = String(up.title || up.kind || "tool");
         const path = up.locations?.[0]?.path;
         // One line, for the progress note and the stall error (a command title keeps its newlines).
@@ -432,6 +431,10 @@ export async function runDelegate({
         try { onProgress?.(("running: " + state.lastToolLabel).slice(0, 200)); } catch {}
       } else {
         state.updateToolStatus(up.toolCallId, up.status);
+      }
+      // The opening frame's questions win; an update fills them in when it had none.
+      if (state.isQuestion(up.toolCallId) && (up.sessionUpdate === "tool_call" || !state.questions.has(up.toolCallId))) {
+        state.recordQuestions(up.toolCallId, (up.rawInput ?? up.args)?.questions);
       }
       if (!isArtifact) recordDiffs(up.content);
     }

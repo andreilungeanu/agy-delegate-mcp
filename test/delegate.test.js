@@ -518,6 +518,15 @@ test("an ask_question whose questions cannot be read keeps the warning instead",
   assert.match(out.protocolWarnings.join(" "), /agy is asking a question/);
 });
 
+test("questions are read from a tool_call_update when the opening frame had none", async () => {
+  const out = await replayResult([
+    { sessionUpdate: "tool_call", toolCallId: "ask1", name: "ask_question", kind: "other", status: "in_progress", title: "Run ask_question" },
+    { sessionUpdate: "tool_call_update", toolCallId: "ask1", name: "ask_question", status: "pending", rawInput: { questions: AGY_QUESTIONS } },
+    msgChunk("Which variable?"),
+  ]);
+  assert.equal(out.questions.length, 2);
+});
+
 test("questions is reported alongside the warning for a background command still running", async () => {
   const out = await replayResult([
     runCommand("bg", "npm run dev", "in_progress"),
