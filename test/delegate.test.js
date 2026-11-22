@@ -1798,3 +1798,17 @@ test("a steer after a cancel is refused, so the cancelled turn stays cancelled",
   assert.equal(out.stopReason, "cancelled");
   assert.doesNotMatch(out.result, /STEERED/);
 });
+
+test("a steer agy rejects leaves the turn's own result, with the rejection in protocolWarnings", async () => {
+  let client;
+  let steered;
+  const out = await runDelegate({
+    spec: "STEERABLE task", workspace: process.cwd(),
+    clientFactory: () => (client = fakeFactory()),
+    onSessionReady: (sid) => { steered = steerWhenOpen(() => client, sid, "REJECT this"); },
+  });
+  await steered;
+  assert.equal(out.result, "held finished");
+  assert.deepEqual(out.usage, { scope: "turn", inputTokens: 5, totalTokens: 5 });
+  assert.ok(out.protocolWarnings?.some((w) => /steer was rejected/.test(w) && /steer rejected/.test(w)), JSON.stringify(out.protocolWarnings));
+});

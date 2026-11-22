@@ -81,6 +81,18 @@ function holdTurn(m) {
 }
 function steerTurn(m) {
   const sid = m.params.sessionId;
+  // A steer this agent rejects: the held turn carries on and finishes by itself.
+  if (/REJECT/.test(m.params.prompt?.[0]?.text ?? "")) {
+    fail(m, -32602, "Invalid params: steer rejected");
+    const h = held;
+    held = null;
+    setTimeout(() => {
+      update(sid, { sessionUpdate: "tool_call_update", toolCallId: "c-hold", status: "completed" });
+      update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "held finished" } });
+      reply(h, { stopReason: "end_turn", usage: { inputTokens: 5, totalTokens: 5 } });
+    }, 20);
+    return;
+  }
   reply(held, { stopReason: "end_turn", usage: { inputTokens: 5, totalTokens: 5 } });
   held = null;
   setTimeout(() => {

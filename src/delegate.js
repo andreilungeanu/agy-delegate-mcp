@@ -325,6 +325,7 @@ export async function runDelegate({
   // Malformed frames noticed as they arrive, where protocolWarnings does not exist yet. Merged
   // into it with the rest below.
   const frameWarnings = [];
+  const steerWarnings = [];
 
   // Diff blocks name the files an edit tool changed. agy sends them on the finished
   // tool_call_update; tool_call is read too, since a frame that arrives already finished carries
@@ -475,8 +476,14 @@ export async function runDelegate({
           }
           const steer = client.takeSteer?.();
           if (!steer) break;
-          turn = await steer;
-          replies.push(turn);
+          // A rejected steer redirected nothing: the turn it was aimed at stands, and the caller,
+          // told "steered", learns here that agy refused it.
+          try {
+            turn = await steer;
+            replies.push(turn);
+          } catch (err) {
+            steerWarnings.push(`a steer was rejected by agy and did not redirect the turn: ${err?.message || String(err)}`);
+          }
         }
         return { ...turn, replies };
       } finally {
@@ -569,6 +576,7 @@ export async function runDelegate({
     if (resumeError) protocolWarnings.push(`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`);
     protocolWarnings.push(...contextWarnings);
     protocolWarnings.push(...frameWarnings);
+    protocolWarnings.push(...steerWarnings);
     if (protocolWarnings.length) out.protocolWarnings = protocolWarnings;
     return out;
   } catch (err) {
