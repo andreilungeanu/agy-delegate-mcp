@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient } from "../src/acp-client.js";
-import { runDelegate as rawRunDelegate } from "../src/delegate.js";
+import { runDelegate as rawRunDelegate, BRIDGE_SYSTEM_PROMPT } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
@@ -173,6 +173,49 @@ test("a finished delegation lets the agent close its session and exit by itself"
     ? { code: client.child.exitCode, signal: client.child.signalCode }
     : await new Promise((resolve) => client.once("exit", resolve));
   assert.deepEqual({ code, signal }, { code: 0, signal: null }, "the agent must exit on its own, not be killed");
+});
+
+// Read off the wire: the flight recorder is opt-in and reads the flag when start() builds the peer.
+async function sentFrames(opts) {
+  let client;
+  const prev = process.env.AGY_DELEGATE_TRANSCRIPT;
+  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
+  try {
+    await runDelegate({ spec: "do the thing", workspace: process.cwd(), ...opts, clientFactory: () => (client = fakeFactory()) });
+  } finally {
+    if (prev === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
+    else process.env.AGY_DELEGATE_TRANSCRIPT = prev;
+  }
+  return client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line));
+}
+
+test("a new session carries the bridge's rules in agy's appended system prompt", async () => {
+  const sent = await sentFrames({});
+  const open = sent.find((f) => f.method === "session/new");
+  assert.equal(open.params._meta?.antigravity?.systemPrompt?.append, BRIDGE_SYSTEM_PROMPT);
+  assert.match(BRIDGE_SYSTEM_PROMPT, /do not call ask_question/);
+});
+
+// agy keeps the appended prompt with the session and ignores one sent on resume.
+test("a resume does not resend the appended system prompt", async () => {
+  const sent = await sentFrames({ resumeSessionId: "known-old" });
+  const open = sent.find((f) => f.method === "session/resume");
+  assert.equal(open.params.sessionId, "known-old");
+  assert.equal(open.params._meta, undefined);
+});
+
+test("no system prompt is appended for an agent that does not advertise it", async () => {
+  let options = "not called";
+  await runDelegate({
+    spec: "task", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient();
+      client.initialize = async () => { client.agentCapabilities = { sessionCapabilities: { close: {} } }; };
+      client.newSession = async (_cwd, opts) => { options = opts; return { sessionId: "sess" }; };
+      return client;
+    },
+  });
+  assert.equal(options, undefined);
 });
 
 test("usage keeps only ACP's numeric token fields, and context only a complete usage_update", async () => {

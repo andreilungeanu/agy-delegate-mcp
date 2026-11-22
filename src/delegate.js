@@ -160,8 +160,22 @@ async function sessionExists(client, sessionId) {
   }
 }
 
+// Appended to agy's system prompt for every session the bridge opens. agy keeps it for the
+// session's life, resumes included, so it holds only what is true in every mode; ask mode's
+// instruction goes in the prompt instead. ask_question ends the turn with the call unfinished
+// (resultSource unfinished-tool), where a question in the final message is a plain result.
+export const BRIDGE_SYSTEM_PROMPT = "You are running headless: another agent delegated this task and reads your final message"
+  + " as the result. No person can answer during the turn. If you need a decision, do not call ask_question;"
+  + " end the turn with the question as your final message. After your last tool call, finish with a message"
+  + " that reports the outcome.";
+
+function newSession(client, workspace) {
+  const append = client.agentCapabilities?._meta?.antigravity?.systemPrompt?.append === true;
+  return client.newSession(workspace, append ? { appendSystemPrompt: BRIDGE_SYSTEM_PROMPT } : undefined);
+}
+
 async function openSession(client, resumeSessionId, workspace) {
-  if (!resumeSessionId) return client.newSession(workspace);
+  if (!resumeSessionId) return newSession(client, workspace);
   try {
     await client.resumeSession(resumeSessionId, workspace);
     return { sessionId: resumeSessionId };
@@ -176,7 +190,7 @@ async function openSession(client, resumeSessionId, workspace) {
     }
     // Starting fresh is right, but silently doing so leaves the caller unable to tell a
     // stale id from a typo'd one — keep why the resume failed.
-    const fresh = await client.newSession(workspace);
+    const fresh = await newSession(client, workspace);
     return { ...fresh, resumeError: `agy has no session ${resumeSessionId}` };
   }
 }
