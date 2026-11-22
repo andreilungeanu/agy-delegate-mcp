@@ -465,6 +465,10 @@ export async function runDelegate({
       promptInFlight = true;
       try {
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
+        // The caller gets the session id as the session opens, before the config calls above, so
+        // a cancel can land before there is a turn to cancel. Honoured here, the prompt never goes
+        // out; sent anyway, it ran in full under a "cancelled" reply.
+        if (client.cancelRequested) return { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
         const first = client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
         // Opened only once the prompt is on the wire (request writes synchronously): a steer
         // accepted earlier went out first, and agy took the brief as a redirect of it.
@@ -528,7 +532,7 @@ export async function runDelegate({
         "the agent ran a tool after its last message and never spoke again, so no final message closed the turn."
         + " result carries the last message before that tool call — it may be a preamble rather than the answer."
       );
-    } else if (!finalMessageAvailable) {
+    } else if (!finalMessageAvailable && !res?.cancelledBeforePrompt) {
       protocolWarnings.push("the agent ended the turn without emitting any message; result is empty.");
     }
     let stopReason;

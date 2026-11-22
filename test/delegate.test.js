@@ -1889,3 +1889,28 @@ test("summed usage keeps only fields every reply with usage reported", () => {
   assert.deepEqual(readUsage([{ inputTokens: 5, totalTokens: 5 }, {}]), { scope: "turn", inputTokens: 5, totalTokens: 5 });
   assert.equal(readUsage([undefined]), undefined);
 });
+
+// The session id reaches the caller as the session opens, before model, effort and mode are set.
+// A cancel sent then reported "cancelled" while the prompt still went out and ran in full.
+test("a cancel that arrives before the prompt is sent stops the prompt from going out", async () => {
+  let client;
+  const prev = process.env.AGY_DELEGATE_TRANSCRIPT;
+  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
+  let out;
+  try {
+    out = await runDelegate({
+      spec: "do the thing", workspace: process.cwd(),
+      clientFactory: () => (client = fakeFactory()),
+      onSessionReady: (sid) => { client.cancel(sid); },
+    });
+  } finally {
+    if (prev === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
+    else process.env.AGY_DELEGATE_TRANSCRIPT = prev;
+  }
+  const sent = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line));
+  assert.equal(sent.filter((f) => f.method === "session/prompt").length, 0, "no prompt may follow the cancel");
+  assert.equal(out.stopReason, "cancelled");
+  assert.equal(out.result, "");
+  assert.equal(out.filesReportedByEditTools, undefined);
+  assert.ok(!(out.protocolWarnings ?? []).some((w) => /without emitting any message/.test(w)), JSON.stringify(out.protocolWarnings));
+});
