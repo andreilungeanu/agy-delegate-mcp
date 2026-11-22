@@ -258,6 +258,7 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   idleMs?: number, handshakeMs?: number, hardCapMs?: number, timeoutMs?: number,
  *   onClientReady?: (client: any) => void,
  *   onSessionReady?: (sessionId: string, client: any) => void,
+ *   onTurnEnd?: () => void,
  *   onProgress?: (message: string) => void,
  *   progressThrottleMs?: number, heartbeatMs?: number, signal?: AbortSignal,
  *   backgroundSettleMs?: number, backgroundContinueMs?: number, backgroundWaitMs?: number,
@@ -267,7 +268,7 @@ export async function runDelegate({
   spec, mode = "agent", resumeSessionId, workspace,
   model, effort, contextFiles, clientFactory,
   idleMs, handshakeMs, hardCapMs, timeoutMs,
-  onClientReady, onSessionReady, onProgress, progressThrottleMs = 2000,
+  onClientReady, onSessionReady, onTurnEnd, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
   // Quiet after agy's closing usage_update before its continuation counts as over, and how long
@@ -637,6 +638,9 @@ export async function runDelegate({
     }
     throw err;
   } finally {
+    // The turn is decided from here on; what follows is agy's teardown. The server uses this to
+    // stop treating a cancel as one aimed at a running turn.
+    try { onTurnEnd?.(); } catch {}
     clearInterval(heartbeat);
     signal?.removeEventListener("abort", onAbort);
     try { supervisor.finish(); } catch {}

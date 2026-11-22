@@ -242,6 +242,8 @@ export async function runDelegateTool({ args, extra, runDelegate, inFlight, pend
         // (Hosts that serialize tool calls still cannot cancel in flight; that is a host limit.)
         onProgress(`session ready: ${sessionId}`);
       },
+      // From here the turn is decided and agy is only closing; cancel and steer read this.
+      onTurnEnd: () => { if (handle) handle.ended = true; },
     });
     if (handle?.cancelRequested) out.cancelRequested = true;
     return { content: [{ type: "text", text: JSON.stringify(out) }] };
@@ -318,10 +320,20 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         const known = seenSessions.has(sessionId);
         return statusResult(known ? "not-running" : "not-found", sessionId);
       }
+      // A handle whose turn has ended stays registered while agy closes. A cancel there is not
+      // aimed at a turn: the result is left alone, and force only cuts the close short.
+      const ending = [...handles].filter((handle) => handle.ended);
+      const live = [...handles].filter((handle) => !handle.ended);
+      const cutClose = () => Promise.all(ending.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false)));
+      if (live.length === 0) {
+        if (force) await cutClose();
+        return statusResult("not-running", sessionId);
+      }
       // Cancel every turn running on the id: the caller named a session, not one of the
       // turns that happen to share it.
-      for (const handle of handles) handle.cancelRequested = true;
-      await Promise.all([...handles].map((handle) => handle.client.cancel(sessionId).catch(() => {})));
+      for (const handle of live) handle.cancelRequested = true;
+      await Promise.all(live.map((handle) => handle.client.cancel(sessionId).catch(() => {})));
+      if (force) await cutClose();
       if (!force) {
         // The handles stay registered: session/cancel is best-effort, so the turn may still
         // be running. Dropping them here made the natural escalation — cancel, wait, cancel
@@ -331,16 +343,19 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       }
       // Watched rather than slept through: agy stops a cancelled turn in milliseconds, and the
       // delegation's finally drops its handle the moment the turn settles.
+      // A turn that settles inside the grace ends its handle; force then also cuts agy's close
+      // short instead of letting it run out its graceful stop.
       const graceEnds = Date.now() + forceGraceMs;
-      while (Date.now() < graceEnds && inFlight.get(sessionId)?.size) {
+      while (Date.now() < graceEnds && live.some((handle) => !handle.ended && inFlight.get(sessionId)?.has(handle))) {
         await new Promise((r) => setTimeout(r, Math.min(50, Math.max(1, graceEnds - Date.now()))));
       }
-      const stillRunning = inFlight.get(sessionId);
-      if (!stillRunning || stillRunning.size === 0) return statusResult("cancelled", sessionId);
+      const settledNow = live.filter((handle) => handle.ended || !inFlight.get(sessionId)?.has(handle));
+      await Promise.all(settledNow.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false)));
       // Snapshot before awaiting stop. A resume that registers during teardown must not be
       // swept out of the map — it was never killed, and inFlight.delete(sessionId) would
       // hide it from cancel and shutdown.
-      const toKill = [...stillRunning];
+      const toKill = live.filter((handle) => !settledNow.includes(handle));
+      if (toKill.length === 0) return statusResult("cancelled", sessionId);
       const observed = await Promise.all(
         toKill.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false))
       );

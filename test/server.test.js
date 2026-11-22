@@ -562,7 +562,9 @@ test("cancel tool with force returns cancelled when delegation settles during gr
     const cancelRes = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-force-settle", force: true } });
     assert.equal(payload(cancelRes).status, "cancelled");
     assert.deepEqual(payload(cancelRes), { status: "cancelled", sessionId: "sess-force-settle" });
-    assert.equal(stopCalled, false);
+    // The turn settled, so the status is cancelled, not killed; force still cuts agy's graceful
+    // close short rather than letting it run out its grace.
+    assert.equal(stopCalled, true);
     const delegateRes = await delegateP;
     assert.notEqual(delegateRes.isError, true);
     assert.equal(payload(delegateRes).cancelRequested, true);
@@ -1106,4 +1108,34 @@ test("steer reports not-running for a registered delegation whose turn is over",
   const fresh = new AcpClient({ spawnSpec: { command: process.execPath, args: [], options: {} } });
   map.set("sess-new", new Set([{ client: fresh }]));
   assert.equal(steerSession(map, new Set(), "sess-new", "go"), "not-ready");
+});
+
+// After the turn ends the handle stays registered while agy closes. A cancel in that window used
+// to mark the finished result cancelRequested, and force waited out the whole grace before
+// reporting "cancelled".
+test("cancel after the turn has ended reports not-running, and force cuts agy's close short", async () => {
+  let turnEnded;
+  const ended = new Promise((r) => { turnEnded = r; });
+  const runDelegate = (opts) => realRunDelegate({
+    ...opts,
+    clientFactory: stubClientFactory("close-ignoring-stub.js"),
+    onTurnEnd: () => { opts.onTurnEnd?.(); turnEnded(); },
+  });
+  const server = buildServer({ runDelegate });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const delegateP = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "task" } });
+    await ended;
+    const started = Date.now();
+    const cancelRes = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-wedged", force: true } });
+    assert.equal(payload(cancelRes).status, "not-running");
+    const out = payload(await delegateP);
+    assert.ok(Date.now() - started < 1500, `agy's close took ${Date.now() - started} ms after a force cancel`);
+    assert.equal(out.result, "done");
+    assert.equal(out.cancelRequested, undefined, "a finished turn was not cancelled");
+  } finally {
+    await client.close();
+  }
 });
