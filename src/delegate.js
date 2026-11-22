@@ -482,9 +482,10 @@ export async function runDelegate({
         const target = targetModel ?? configOptionValue(options, "model") ?? "the session's model";
         options = optionsFrom(await applyEffort(client, sessionId, target, targetEffort, options));
       }
-      // Saved once agy has accepted them, so a rejected model or effort is not carried forward.
-      if (targetModel !== undefined || targetEffort !== undefined) rememberSettings(sessionId, { model: targetModel, effort: targetEffort });
       servedModel = configOptionValue(options, "model");
+      // Saved once agy has accepted them, so a rejected model or effort is not carried forward. The
+      // model is the one agy reports, so an effort set on agy's default is tied to that model.
+      if (targetModel !== undefined || targetEffort !== undefined) rememberSettings(sessionId, { model: targetModel ?? servedModel, effort: targetEffort });
       // What the agent reported in force as the prompt goes out — never the requested value
       // standing in for a reply that did not confirm it.
       effectiveEffort = effortSettings(options);

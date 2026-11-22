@@ -2142,3 +2142,13 @@ test("a steer that succeeds after one that failed mid-turn is the delegation's r
   });
   assert.equal(out.result, "B answered");
 });
+
+// An effort-only call saved model as undefined, so a resume that then named the model it was
+// running on read as a model change and dropped the effort.
+test("a resume naming the model an earlier effort-only call ran on keeps that effort", async () => {
+  const run = (args) => runDelegate({ spec: "do the thing", workspace: process.cwd(), resumeSessionId: "known-other", clientFactory: fakeFactory, ...args });
+  const first = await run({ effort: "xhigh" });
+  assert.deepEqual(first.effectiveEffort, { thought_level: "xhigh" });
+  const named = await run({ model: first.effectiveModel ?? "gemini-4-neon" });
+  assert.deepEqual(named.effectiveEffort, { thought_level: "xhigh" });
+});
