@@ -72,8 +72,8 @@ export const SERVER_INSTRUCTIONS = `Delegate coding work to Antigravity (agy) th
 
 // No outputSchema: that also requires structuredContent, and a host that reads both (Codex)
 // puts the payload in context twice. One JSON text block; the .strict() copy is in
-// delegate.test.js. Field meanings: skills/delegate/reference.md. cancel status lives on
-// its tool description.
+// delegate.test.js. Field meanings: skills/delegate/reference.md. cancel and steer statuses
+// live on their tool descriptions.
 export const delegateOutputShape = {
   result: z.string(),
   resultSource: z.enum(["pre-tool-fallback", "unfinished-tool", "none"]).optional(),
@@ -354,17 +354,17 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
     "steer",
     {
       description:
-        "Redirect an in-flight delegation by sessionId: message goes to agy as a new instruction for the running turn, and the delegate call returns the redirected turn's result. agy stops a running command to follow it, and finishes a reply it is writing first. Status: steered, not-ready (the delegation has not sent its prompt yet; retry), not-running (turn already ended — resume instead), not-found (id not in this process's recent session history).",
+        "Redirect an in-flight delegation by sessionId: message goes to agy as a new instruction for the running turn, and the delegate call returns the redirected turn's result. Status: steered (sent), not-ready (prompt not sent yet; retry), not-running (turn already ended — resume instead), not-found (id not in this process's recent session history).",
       inputSchema: {
         sessionId: z.string(),
-        message: z.string().trim().min(1, "message must not be blank").describe("The new instruction, sent as written."),
+        message: z.string().trim().min(1, "message must not be blank").describe("The new instruction for agy."),
       },
       annotations: {
         title: "Steer Antigravity delegation",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     async ({ sessionId, message }) => statusResult(steerSession(inFlight, seenSessions, sessionId, message), sessionId)

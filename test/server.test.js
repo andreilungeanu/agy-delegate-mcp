@@ -205,6 +205,7 @@ test("server advertises instructions, output schemas, and conservative tool anno
     }
     assert.equal(tools.steer.annotations.destructiveHint, true);
     assert.equal(tools.steer.annotations.idempotentHint, false);
+    assert.equal(tools.steer.annotations.openWorldHint, true, "a steer can send the agent anywhere delegate can");
     // With the schema gone, the description is the only published source of cancel's statuses.
     for (const status of ["cancelled", "killed", "not-running", "not-found"]) {
       assert.ok(tools.cancel.description.includes(status), `cancel description names ${status}`);

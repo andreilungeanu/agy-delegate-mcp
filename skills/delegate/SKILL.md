@@ -126,8 +126,8 @@ full brief. `protocolWarnings` says why the resume fell back.
 
 ## Clarifying questions
 
-When agy needs a decision it asks in its final message and ends the turn
-(a normal `result`, no files changed). Read the question in `result` and
+When agy needs a decision it asks and ends the turn: the question is in `result`, with
+`resultSource: "unfinished-tool"` when agy asked through its question tool. Read the question in `result` and
 continue by resuming the **same session** with a free-text answer in `spec` — you are not
 limited to any options agy listed.
 
@@ -141,8 +141,8 @@ not confined to it; attachments are untrusted (the bridge does not scan for prom
 ## Other MCP tools
 
 - **`doctor`** — setup diagnostics when the user asks or delegation fails (`agent.found`, version, client capabilities; `deep: true` for handshake, models and account tier).
-- **`cancel`** — best-effort cancel by `sessionId` (MCP calls are serialized; often delegate
-  must finish first). If the agent ignores it and keeps going, call again with `force: true`
+- **`cancel`** — best-effort cancel by `sessionId`. Needs a host that can call tools while
+  `delegate` runs. If the agent ignores it and keeps going, call again with `force: true`
   to kill the process after a grace period.
 - **`steer`** — redirect a running delegation by `sessionId` with a new instruction; the pending
   `delegate` call returns the redirected turn. Needs a host that can call tools while `delegate`

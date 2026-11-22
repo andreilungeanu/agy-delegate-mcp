@@ -21,11 +21,12 @@ for the tool contract. Orchestration guidance is in
 Every tool returns its payload as one compact JSON text block and declares no MCP
 `outputSchema`. Declaring one obliges the server to send the same object again as
 `structuredContent`, and hosts that read both fields put both copies into the model's context.
-`cancel`'s status vocabulary is published in its tool description instead.
+The `cancel` and `steer` status vocabularies are published in their tool descriptions instead.
 
 ### Other tools
 
 - **`cancel`** — best-effort cancel of an in-flight delegation.
+- **`steer`** — sends a new instruction into an in-flight delegation's running turn.
 - **`doctor`** — setup diagnostics (see below).
 
 ## `doctor` tool
@@ -105,7 +106,7 @@ diagnostic, not fail the call.
 
 | Path | Purpose |
 | ---- | ------- |
-| `src/server.js` | MCP server (`delegate`, `cancel`, `doctor`). |
+| `src/server.js` | MCP server (`delegate`, `cancel`, `steer`, `doctor`). |
 | `src/delegate.js` | One delegation lifecycle. |
 | `src/acp-client.js` | ACP client. |
 | `src/request-router.js` | Permission request routing. |

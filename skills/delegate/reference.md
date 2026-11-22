@@ -112,7 +112,8 @@ nothing.
 
 ## Progress
 
-Thinking, streamed response sentences, tool starts, edited files, and the turn title the agent
+The first notification is `session ready: <sessionId>`, the id `cancel` and `steer` take while the
+turn runs. Thinking, streamed response sentences, tool starts, edited files, and the turn title the agent
 picks (`turn titled: …`) arrive as ephemeral MCP progress notifications — separate from
 `result`. The title is a live label for telling concurrent delegations apart and is also named
 in timeout errors; it is not returned in the result.
@@ -152,10 +153,15 @@ exit reports `cancelled` and keeps the session cancellable, so force can be retr
 
 **`steer`** — `{sessionId, message}` → `status: "steered" | "not-ready" | "not-running" | "not-found"`.
 Sends `message` into the running turn as a new instruction; the pending `delegate` call returns
-the redirected turn's result, with `usage` covering the whole turn. agy stops a running command to
-follow it and finishes a reply it is already writing first. `not-ready` means the delegation has
-not sent its prompt yet — retry; `not-running` means the turn ended — resume instead. Usable only
-from a host that can call a tool while `delegate` is still running.
+the redirected turn's result, with `usage` summed over the turn's replies. agy stops a running
+command to follow it and finishes a reply it is already writing first, so `result` can open with
+the end of that reply. In ask mode the message carries ask mode's instruction. `steered` means the
+message was sent; a rejection by agy lands in the delegate result's `protocolWarnings` and the turn
+continues unredirected. `not-ready` means the delegation has not sent its prompt yet — retry;
+`not-running` means the turn ended or was cancelled — resume instead; `not-found` means the id is
+not in this process's recent session history. Usable only from a host that can call a tool while
+`delegate` is still running; the session id arrives first as a `session ready: <id>` progress
+notification.
 
 **`doctor`** — `{deep?}`. Always reports plugin version, MCP client `capabilities`,
 launcher resolution and `agent.found`, plus runtime info. With
