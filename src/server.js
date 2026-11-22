@@ -432,25 +432,32 @@ export function installSignalCleanup(map, {
 } = {}) {
   let shuttingDown = false;
   let signalsSeen = 0;
+  // The code shutdown exits with: a signal's, even when it follows the stdin EOF.
+  let exitCode = 0;
+  // Every handle a stop went to, so a second signal still reaches one that has since unregistered.
+  const dispatched = new Set();
   const shutdown = (code, fromSignal = false) => {
     // Only a second signal skips the wait for the kills: a hangup closes stdin and sends SIGHUP,
     // in either order. The first stops may still be in their ps walk, so the groups are killed
     // synchronously before leaving.
     if (fromSignal) signalsSeen++;
     if (shuttingDown) {
+      if (fromSignal && signalsSeen === 1) { exitCode = code; setExitCode(code); }
       if (signalsSeen < 2) return undefined;
-      for (const handles of [...map.values(), pending]) {
-        for (const handle of handles) { try { handle.client.killNow?.(); } catch {} }
+      for (const handle of new Set([...dispatched, ...[...map.values()].flatMap((h) => [...h]), ...pending])) {
+        try { handle.client.killNow?.(); } catch {}
       }
       return exit(code);
     }
     shuttingDown = true;
+    exitCode = code;
     // Set now: if the loop runs dry before the scheduled exit, the process still exits with it.
     setExitCode(code);
     const stops = [];
     // A stop that did not see the exit is retried once, as the delegation does.
     const stopOnce = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
     const dispatch = (handle) => {
+      dispatched.add(handle);
       try { stops.push(stopOnce(handle).then((exited) => (exited === false ? stopOnce(handle) : exited))); } catch {}
     };
     for (const handles of map.values()) for (const handle of handles) dispatch(handle);
@@ -459,7 +466,7 @@ export function installSignalCleanup(map, {
     // Exit waits for the kills: on Windows taskkill is a separate process, and exiting first left
     // the launcher and agent running (measured). stop() bounds itself. The exit is scheduled onto
     // a clean loop turn, off the settlement stack.
-    const leave = () => schedule(() => exit(code));
+    const leave = () => schedule(() => exit(exitCode));
     Promise.all(stops).then(leave, leave);
   };
   // On POSIX each agent has its own process group, so a signal to this process does not reach it.

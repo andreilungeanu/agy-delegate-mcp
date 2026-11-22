@@ -1318,12 +1318,22 @@ test("shutdown retries a stop that did not see the agent exit before leaving", a
   const calls = [];
   const map = new Map([["sess-1", new Set([{ client: { stop: () => { calls.push(Date.now()); return Promise.resolve(calls.length > 1); } } }])]]);
   const stdin = new EventEmitter();
-  installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin });
-  stdin.emit("end");
-  await flushExit();
-  await flushExit();
-  assert.equal(calls.length, 2, "the stop must be retried once");
-  assert.deepEqual(exited, [0]);
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin });
+    stdin.emit("end");
+    await flushExit();
+    await flushExit();
+    assert.equal(calls.length, 2, "the stop must be retried once");
+    assert.deepEqual(exited, [0]);
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+  }
 });
 
 // An untrimmed id missed the session and started a fresh one without its context; a blank one
@@ -1420,5 +1430,56 @@ test("force cancel kills a turn that ignored it without waiting for another turn
     await Promise.all([a, b]);
   } finally {
     await client.close();
+  }
+});
+
+// Shutdown kept the code of its first trigger, so a stdin EOF followed by SIGHUP exited 0 where the
+// reverse order exited 129.
+test("a signal after the stdin EOF sets the exit code", { skip: process.platform === "win32" }, async () => {
+  const exited = [];
+  const codes = [];
+  let settle;
+  const stopped = new Promise((r) => { settle = r; });
+  const map = new Map([["sess-1", new Set([{ client: { stop: () => stopped } }])]]);
+  const stdin = new EventEmitter();
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: (code) => codes.push(code), stdin });
+    stdin.emit("end");
+    process.emit("SIGHUP");
+    settle(true);
+    await flushExit();
+    assert.deepEqual(exited, [129]);
+    assert.equal(codes.at(-1), 129);
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+  }
+});
+
+// The second signal killed what was still registered; a handle that left pending while shutdown
+// was retrying its stop (doctor's, after its own stop returned) was no longer there to kill.
+test("a second signal kills every agent shutdown dispatched to, even one no longer registered", { skip: process.platform === "win32" }, async () => {
+  const killed = [];
+  const handle = { client: { stop: () => new Promise(() => {}), killNow: () => killed.push("doctor") } };
+  const pending = new Set([handle]);
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    installSignalCleanup(new Map(), { pending, exit: () => {}, setExitCode: () => {}, stdin: new EventEmitter() });
+    process.emit("SIGTERM");
+    pending.delete(handle);
+    process.emit("SIGINT");
+    assert.deepEqual(killed, ["doctor"]);
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
   }
 });
