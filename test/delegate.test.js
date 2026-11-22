@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
-import { AcpClient } from "../src/acp-client.js";
+import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 import { runDelegate as rawRunDelegate, readUsage } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
@@ -1749,11 +1749,11 @@ test("a steer during the background wait ends the wait and returns the steered r
       client.takeSteer = () => steers.shift();
       client.steer = (_sid, text) => {
         if (!open) return "not-ready";
-        steers.push((async () => {
+        steers.push(stampSettlement((async () => {
           client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "failed" } });
           client.emit("update", { update: msgChunk(`steered: ${text}`) });
           return { stopReason: "end_turn" };
-        })());
+        })()));
         return "steered";
       };
       clientRef = client;
@@ -1929,4 +1929,32 @@ test("a host abort during agy's graceful close cuts it short", async () => {
   });
   assert.equal(out.result, "done");
   assert.ok(Date.now() - endedAt < 1500, `the close ran ${Date.now() - endedAt} ms after the abort`);
+});
+
+// agy settles the prompt a steer redirects at once, so a steer reply that fails after that is the
+// turn failing (a quota or auth error), not agy refusing the steer: the delegation must fail.
+test("a steer agy accepted and that then fails fails the delegation", async () => {
+  let client;
+  let steered;
+  await assert.rejects(
+    runDelegate({
+      spec: "STEERABLE task", workspace: process.cwd(),
+      clientFactory: () => (client = fakeFactory()),
+      onSessionReady: (sid) => { steered = steerWhenOpen(() => client, sid, "FAILLATER"); },
+    }),
+    (err) => err.reason === "agent-error" && /quota exhausted/.test(err.message),
+  );
+  await steered;
+});
+
+test("a first prompt that fails while a steer is queued returns the steered turn", async () => {
+  let client;
+  let steered;
+  const out = await runDelegate({
+    spec: "STEERABLE task", workspace: process.cwd(),
+    clientFactory: () => (client = fakeFactory()),
+    onSessionReady: (sid) => { steered = steerWhenOpen(() => client, sid, "AFTERFAIL"); },
+  });
+  await steered;
+  assert.equal(out.result, "STEERED after failure");
 });

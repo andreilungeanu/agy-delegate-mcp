@@ -15,6 +15,16 @@ const STOP_EXIT_TIMEOUT_MS = 2000;
 // How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
 export const GRACEFUL_STOP_MS = 2000;
 
+// Settlement order of prompt replies. A steer agy refuses settles before the turn it was aimed
+// at; one agy took over settles after it, since agy ends the redirected prompt at once. The
+// stamp is attached when the request is made, so it records when the reply came, not when the
+// delegation got round to reading it.
+let settleSeq = 0;
+/** @returns {Promise<{ ok: true, value: any, seq: number } | { ok: false, error: any, seq: number }>} */
+export function stampSettlement(promise) {
+  return promise.then((value) => ({ ok: true, value, seq: ++settleSeq }), (error) => ({ ok: false, error, seq: ++settleSeq }));
+}
+
 export class AcpClient extends EventEmitter {
   /**
    * @param {{
@@ -195,10 +205,9 @@ export class AcpClient extends EventEmitter {
     if (this._steerWindow === "setup") return "not-ready";
     if (this._steerWindow !== "open" || !this.peer) return "not-running";
     const body = this._steerPrefix ? `${this._steerPrefix}\n\n${text}` : text;
-    const reply = this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] });
-    // The delegation awaits it; this keeps a rejection it never reaches from going unhandled.
-    reply.catch(() => {});
-    this._steers.push(reply);
+    // Stamped, and so never rejecting: the delegation reads ok/error, and a reply it never reaches
+    // cannot surface as an unhandled rejection.
+    this._steers.push(stampSettlement(this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] })));
     return "steered";
   }
   hasSteer() { return this._steers.length > 0; }

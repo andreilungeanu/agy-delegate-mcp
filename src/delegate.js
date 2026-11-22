@@ -6,7 +6,7 @@ import { statSync, realpathSync } from "node:fs";
 // its progress stream. The statSync calls below stay sync — they are argument validation and
 // run before the spawn.
 import { readFile } from "node:fs/promises";
-import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
+import { AcpClient, GRACEFUL_STOP_MS, stampSettlement } from "./acp-client.js";
 import { DEFAULT_HARD_CAP_MS, SessionSupervisor } from "./session-supervisor.js";
 import { normalizeAgentReportedFiles } from "./agent-reported-files.js";
 import { makeTurnState } from "./turn-state.js";
@@ -470,30 +470,41 @@ export async function runDelegate({
         // a cancel can land before there is a turn to cancel. Honoured here, the prompt never goes
         // out; sent anyway, it ran in full under a "cancelled" reply.
         if (client.cancelRequested) return { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
-        const first = client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
+        const first = stampSettlement(client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]));
         // Opened only once the prompt is on the wire (request writes synchronously): a steer
         // accepted earlier went out first, and agy took the brief as a redirect of it.
         client.acceptSteers?.(true, mode === "ask" ? ASK_PREAMBLE : undefined);
-        let turn = await first;
-        const replies = [turn];
+        const settled = await first;
+        let turn = settled.ok ? settled.value : undefined;
+        let turnError = "error" in settled ? settled.error : undefined;
+        let turnSeq = settled.seq;
+        const replies = settled.ok ? [turn] : [];
         // A steer settles the prompt before it at once with end_turn, so the turn ends only when
         // the newest steer's reply does. Each pass re-checks for a background command, which a
         // steered turn can leave running too.
         for (;;) {
-          if (!client.hasSteer?.() && state.backgroundToolCalls().length && await waitForBackground() === "cancelled") {
+          if (turn && !client.hasSteer?.() && state.backgroundToolCalls().length && await waitForBackground() === "cancelled") {
             return { ...turn, stopReason: "cancelled", replies };
           }
           const steer = client.takeSteer?.();
           if (!steer) break;
-          // A rejected steer redirected nothing: the turn it was aimed at stands, and the caller,
-          // told "steered", learns here that agy refused it.
-          try {
-            turn = await steer;
+          const reply = await steer;
+          if (reply.ok) {
+            turn = reply.value;
+            turnError = undefined;
+            turnSeq = reply.seq;
             replies.push(turn);
-          } catch (err) {
-            steerWarnings.push(`a steer was rejected by agy and did not redirect the turn: ${err?.message || String(err)}`);
+          } else if (reply.seq < turnSeq) {
+            // Refused before the turn it was aimed at settled: that turn stands, and the caller,
+            // told "steered", learns here that agy refused it.
+            steerWarnings.push(`a steer was rejected by agy and did not redirect the turn: ${reply.error?.message || String(reply.error)}`);
+          } else {
+            // Failed after taking the turn over (agy had already ended the prompt it redirected):
+            // the turn failed, as a prompt failing would.
+            throw reply.error;
           }
         }
+        if (turnError) throw turnError;
         return { ...turn, replies };
       } finally {
         // Closed in the same tick as the last check above, so no steer lands unread.

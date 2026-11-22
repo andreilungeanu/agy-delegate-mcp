@@ -81,6 +81,25 @@ function holdTurn(m) {
 }
 function steerTurn(m) {
   const sid = m.params.sessionId;
+  const text = m.params.prompt?.[0]?.text ?? "";
+  // A steer agy accepts (the held prompt settles at once) and that then fails, as a quota or
+  // auth error would.
+  if (/FAILLATER/.test(text)) {
+    reply(held, { stopReason: "end_turn" });
+    held = null;
+    setTimeout(() => fail(m, -32603, "Internal error: quota exhausted"), 20);
+    return;
+  }
+  // The held prompt fails on its own while the steer is queued; the steer then completes.
+  if (/AFTERFAIL/.test(text)) {
+    fail(held, -32603, "Internal error: first prompt failed");
+    held = null;
+    setTimeout(() => {
+      update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "STEERED after failure" } });
+      reply(m, { stopReason: "end_turn" });
+    }, 20);
+    return;
+  }
   // A steer this agent rejects: the held turn carries on and finishes by itself.
   if (/REJECT/.test(m.params.prompt?.[0]?.text ?? "")) {
     fail(m, -32602, "Invalid params: steer rejected");
