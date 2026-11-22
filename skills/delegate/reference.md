@@ -37,8 +37,8 @@ retry with the returned `resumeSessionId`, the complete original `spec`, and a l
 | `sessionId` | Session id for resume. |
 | `effectiveModel` | The base model id agy ran, present when it differs from `model` and always when `model` was omitted. |
 | `effectiveEffort` | The thinking level in force, as agy reported it when the prompt went out — `{"thought_level": "high"}`. Present whenever known, even when `effort` was omitted. Absent when agy did not confirm a value, so never read absence as a level. |
-| `usage` | Token counts agy reported for this turn, labelled `scope: "turn"`: `inputTokens`, `outputTokens`, `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens`, `totalTokens`, each present when reported. Does not include agy's continuation after a command it moved to the background. |
-| `context` | `{used, size}`: tokens the session's conversation occupies and the model's context window, from agy's last `usage_update` of the turn. Carries over a resume, so a session near `size` is a candidate for a fresh session with a rewritten brief. |
+| `usage` | Token counts agy reported for this turn, labelled `scope: "turn"`: `inputTokens`, `outputTokens`, `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens`, `totalTokens`. A steered turn sums its replies: `inputTokens`, `outputTokens` and `totalTokens` appear only when every reply reported them; a cached or thought count a reply left out counts as 0. Does not include agy's continuation after a command it moved to the background. Absent when agy reported none. |
+| `context` | `{used, size}`: tokens the session's conversation occupies and the model's context window, from agy's last `usage_update` of the turn. Absent when agy sent none. Carries over a resume, so a session near `size` is a candidate for a fresh session with a rewritten brief. |
 | `filesReportedByEditTools` | Workspace files the agent reported editing (native ACP diff events), relative to `workspace` when inside it. Omitted when empty — absence means no edit tool reported a change, **not** that nothing changed: shell-driven edits leave no diff event; the git diff is authoritative. agy's own artifacts are not listed here. |
 | `resumed` | Present and **`true` only** when a resume took (the returned session id matched `resumeSessionId`). Absent for a fresh session or a resume that fell back — the fallback is explained in `protocolWarnings`. |
 | `cancelRequested` | `true` when a cancel was issued mid-run. Distinguishes a clean finish from one where the agent ignored the cancel and completed anyway. |
@@ -106,7 +106,9 @@ is recorded and it returns nothing at all.
 
 Cross-process resume via `session/resume`, which restores the conversation without replaying it.
 agy reopens a resumed session at its default model, thinking level and mode, so the bridge sends
-`model`, `effort` and `mode` again on every resume. An id agy does not list starts a fresh
+`model`, `effort` and `mode` again on every resume. A resume that leaves `model` out uses the model
+last set on that session by this server process; one that leaves `effort` out uses the effort last
+set, unless `model` changes. A restarted server has no record and leaves agy's defaults. An id agy does not list starts a fresh
 session with a `protocolWarnings` entry; any other resume failure is `resume-failed` and starts
 nothing.
 
@@ -149,19 +151,20 @@ cancellable afterwards, so a follow-up call with `force: true` kills the process
 grace period. `killed` means the process was observed to exit; a force that cannot confirm the
 exit reports `cancelled` and keeps the session cancellable, so force can be retried.
 `not-running` means the turn already ended — the session is still resumable via
-`resumeSessionId`; `not-found` means the id is not in this process's recent session history.
+`resumeSessionId`, and with `force` the agent's shutdown is cut short; `not-found` means the id is
+not in this process's recent session history.
 
 **`steer`** — `{sessionId, message}` → `status: "steered" | "not-ready" | "not-running" | "not-found"`.
 Sends `message` into the running turn as a new instruction; the pending `delegate` call returns
 the redirected turn's result, with `usage` summed over the turn's replies. agy stops a running
 command to follow it and finishes a reply it is already writing first, so `result` can open with
 the end of that reply. In ask mode the message carries ask mode's instruction. `steered` means the
-message was sent; a rejection by agy lands in the delegate result's `protocolWarnings` and the turn
-continues unredirected. `not-ready` means the delegation has not sent its prompt yet — retry;
-`not-running` means the turn ended or was cancelled — resume instead; `not-found` means the id is
-not in this process's recent session history. Usable only from a host that can call a tool while
-`delegate` is still running; the session id arrives first as a `session ready: <id>` progress
-notification.
+message was sent. agy refusing it lands in the delegate result's `protocolWarnings` and the turn
+continues unredirected; a steered turn that then fails fails the `delegate` call, as the turn would.
+`not-ready` means the delegation has not sent its prompt yet — retry; `not-running` means the turn
+ended, was cancelled or lost its agent — resume instead; `not-found` means the id is not in this
+process's recent session history. Usable only from a host that can call a tool while `delegate` is
+still running.
 
 **`doctor`** — `{deep?}`. Always reports plugin version, MCP client `capabilities`,
 launcher resolution and `agent.found`, plus runtime info. With

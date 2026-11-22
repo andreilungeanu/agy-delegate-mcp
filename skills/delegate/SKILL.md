@@ -120,6 +120,7 @@ with no such directory the project root is the floor.
 - **New session (default):** wrong approach, failed run, or substantial rework — pass a fresh inline brief.
 - **`resumeSessionId`:** only when the prior run was on the right track and needs a small
 clarification or follow-up in the same session. An id agy does not have falls back to a new session.
+A `context.used` near `context.size` also calls for a new session.
 - Never guess a `resumeSessionId`. After any resume call, check `resumed` in the
 response — if it is **absent** (not `true`), the run had **zero** prior context, so re-send a
 full brief. `protocolWarnings` says why the resume fell back.
@@ -129,7 +130,9 @@ full brief. `protocolWarnings` says why the resume fell back.
 When agy needs a decision it asks and ends the turn: the question is in `result`, with
 `resultSource: "unfinished-tool"` when agy asked through its question tool. Read the question in `result` and
 continue by resuming the **same session** with a free-text answer in `spec` — you are not
-limited to any options agy listed.
+limited to any options agy listed. If agy asked with no prose, `result` is empty
+(`resultSource: "none"`) and `protocolWarnings` says agy is asking a question: resume and ask it
+to state the question.
 
 ## Security
 

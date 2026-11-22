@@ -22,6 +22,7 @@ Every tool returns its payload as one compact JSON text block and declares no MC
 `outputSchema`. Declaring one obliges the server to send the same object again as
 `structuredContent`, and hosts that read both fields put both copies into the model's context.
 The `cancel` and `steer` status vocabularies are published in their tool descriptions instead.
+A failed `delegate` returns `isError: true` with plain text: `delegate failed [<reason>]: <message>`.
 
 ### Other tools
 
@@ -73,7 +74,8 @@ diagnostic, not fail the call.
   to `plan`. `ask` also prefixes the prompt with an answer-only instruction; agy has no ask mode.
 - **Resume**: `session/resume`, which restores the conversation without replaying it. agy opens a
   resumed session at its default model, thinking level and mode, so all three are compared and
-  re-sent. agy answers an unknown id and a failed read with the same `-32603`; the bridge checks
+  re-sent; a `model` or `effort` the caller leaves out is taken from what this process last set on
+  the session. agy answers an unknown id and a failed read with the same `-32603`; the bridge checks
   `session/list` (every session the account has, one page) and starts fresh only for an id agy
   does not list.
 - **Plan**: in plan mode agy writes the plan with a `write_file` call carrying `ArtifactMetadata`,
@@ -82,6 +84,15 @@ diagnostic, not fail the call.
 - **`filesReportedByEditTools`**: built solely from ACP `diff` content blocks on `tool_call` and
   `tool_call_update`; no git inference. agy writes a finished diff's path as `/C:/…` on Windows;
   the bridge strips the slash before resolving it against the workspace.
+- **Steer**: a second `session/prompt` on the running session. agy settles the prompt it redirects
+  at once with `end_turn`, so the turn ends with the newest steer's reply. A steer reply that fails
+  before the turn it targets settles is a refusal (a warning); one that fails after is the turn
+  failing.
+- **Usage**: the `session/prompt` reply carries the turn's token counts (`usage`); `usage_update`
+  frames carry the session's context fill (`used`, `size`).
+- **Teardown**: `session/close` for each session when `sessionCapabilities.close` is advertised,
+  then stdin EOF; agy exits by itself within the 2 s grace, then the tree is killed. A stall,
+  abort, agent exit, force cancel or shutdown skips the grace.
 - `session/prompt` takes a content-block array: the text block, then `resource_link` blocks for
   text `contextFiles` and inline `image` blocks for images, gated on
   `promptCapabilities.image`.
