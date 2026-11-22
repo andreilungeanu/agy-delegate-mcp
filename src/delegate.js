@@ -189,13 +189,16 @@ const isTokenCount = (v) => Number.isFinite(v) && v >= 0;
 // fields ACP names, and only numbers, so an agent's extra keys stay out of the result. A steered
 // turn has one reply per prompt, each covering its own part, so they are summed.
 const USAGE_FIELDS = ["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens", "totalTokens"];
+const BREAKDOWN_FIELDS = new Set(["cachedReadTokens", "cachedWriteTokens", "thoughtTokens"]);
 export function readUsage(raws) {
   const reported = raws.filter((raw) => raw && typeof raw === "object" && USAGE_FIELDS.some((k) => isTokenCount(raw[k])));
-  // A field counts only when every reply that reported usage carried it; summed from some of them
-  // it would understate the turn.
-  const fields = USAGE_FIELDS.filter((k) => reported.length && reported.every((raw) => isTokenCount(raw[k])));
+  // The totals count only when every reply that reported usage carried them; summed from some of
+  // them they would understate the turn. A breakdown field a reply left out is zero for it.
+  const fields = USAGE_FIELDS.filter((k) => reported.length && (BREAKDOWN_FIELDS.has(k)
+    ? reported.some((raw) => isTokenCount(raw[k]))
+    : reported.every((raw) => isTokenCount(raw[k]))));
   if (!fields.length) return undefined;
-  return { scope: "turn", ...Object.fromEntries(fields.map((k) => [k, reported.reduce((sum, raw) => sum + raw[k], 0)])) };
+  return { scope: "turn", ...Object.fromEntries(fields.map((k) => [k, reported.reduce((sum, raw) => sum + (isTokenCount(raw[k]) ? raw[k] : 0), 0)])) };
 }
 
 function modelOption(configOptions) {
@@ -355,6 +358,8 @@ export async function runDelegate({
   // folded into this turn.
   client.on("update", (u) => {
     if (!promptInFlight) return;
+    // One session per agy process today; the check keeps another session's frames out regardless.
+    if (sessionId && typeof u?.sessionId === "string" && u.sessionId !== sessionId) return;
     const up = u?.update || {};
     state.lastFrameAt = Date.now();
     state.usageAfterActivity = up.sessionUpdate === "usage_update";

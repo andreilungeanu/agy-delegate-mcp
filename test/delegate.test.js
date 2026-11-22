@@ -2008,3 +2008,29 @@ test("the background wait keeps one clock across a steered turn", async () => {
   const took = Date.now() - started;
   assert.ok(took < 1000, `the wait ran ${took} ms against a 700 ms bound`);
 });
+
+// A breakdown field (cached, thought) a reply leaves out is zero for that reply; the totals that
+// the caller compares against still need every reply.
+test("summed usage keeps a breakdown field one reply left out", () => {
+  assert.deepEqual(
+    readUsage([{ inputTokens: 1, totalTokens: 1, thoughtTokens: 3 }, { inputTokens: 2, totalTokens: 2 }]),
+    { scope: "turn", inputTokens: 3, thoughtTokens: 3, totalTokens: 3 },
+  );
+});
+
+test("context ignores a usage_update addressed to another session", async () => {
+  const out = await runDelegate({
+    spec: "task", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient("sess-own");
+      client.prompt = async () => {
+        client.emit("update", { sessionId: "sess-own", update: { sessionUpdate: "usage_update", used: 10, size: 100 } });
+        client.emit("update", { sessionId: "sess-other", update: { sessionUpdate: "usage_update", used: 99, size: 100 } });
+        client.emit("update", { sessionId: "sess-own", update: msgChunk("ok") });
+        return { stopReason: "end_turn" };
+      };
+      return client;
+    },
+  });
+  assert.deepEqual(out.context, { used: 10, size: 100 });
+});
