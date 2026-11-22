@@ -28,12 +28,25 @@ export function resolveAcpSpawn() {
   return { command, args, options: { shell: process.platform === "win32" } };
 }
 
-// Node 24 warns (DEP0190) on args passed with shell: true. Node joins them with spaces anyway, so
-// joining here sends cmd.exe the same line without the warning.
+// Under shell: true Node hands cmd.exe one joined line and quotes nothing, so a launcher path or an
+// argument with a space or a cmd metacharacter split there. A value already holding a quote passes
+// as given: cmd cannot nest them, and a pre-quoted path is how one with a space had to be written.
+// %VAR% still expands, inside quotes too.
+function cmdQuote(value) {
+  const s = String(value);
+  if (s.includes('"') || (s !== "" && !/[\s&|<>^(),;=]/.test(s))) return s;
+  // Doubled so the child's argv parser does not read a trailing backslash as escaping the quote.
+  return `"${s.replace(/(\\+)$/, "$1$1")}"`;
+}
+
+// The line is built here, quoted for cmd.exe, and passed alone: Node 24 warns (DEP0190) on args
+// passed with shell: true.
 /** @returns {[string, string[]]} */
 export function spawnCommandLine(command, args, options) {
   const argv = args ?? [];
-  return options?.shell ? [[command, ...argv].join(" "), []] : [command, argv];
+  if (!options?.shell) return [command, argv];
+  const quote = process.platform === "win32" ? cmdQuote : String;
+  return [[command, ...argv].map(quote).join(" "), []];
 }
 
 /**

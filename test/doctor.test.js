@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -500,5 +500,19 @@ test("an abort during the version probe returns once the probe process is gone",
   } finally {
     if (saved === undefined) delete process.env.AGY_TEST_PIDFILE; else process.env.AGY_TEST_PIDFILE = saved;
     rmSync(pidFile, { force: true });
+  }
+});
+
+test("runDoctor probes through cmd.exe with a launcher path holding spaces", { skip: process.platform !== "win32" && "cmd.exe quoting" }, async () => {
+  const argvPath = fileURLToPath(new URL("./fixtures/version-argv.mjs", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "doctor launcher "));
+  try {
+    const launcher = join(dir, "launch me.cmd");
+    writeFileSync(launcher, `@echo off\r\n"${process.execPath}" "${argvPath}" %*\r\n`);
+    const out = await rawRunDoctor({ spawnSpec: { command: launcher, args: ["two words", "acp"], options: { shell: true } } });
+    assert.equal(out.agent.error, undefined);
+    assert.equal(out.agent.version, '["--version"]');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
