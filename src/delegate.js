@@ -16,9 +16,6 @@ import { transcriptFrames } from "./jsonrpc.js";
 
 export const DEFAULT_HANDSHAKE_MS = 60000;
 
-// Agents whose delegation has returned but whose graceful stop is still running. The server's
-// inFlight no longer holds them, so shutdown reads this set too.
-export const draining = new Set();
 export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
 
 // The bridge's modes onto agy's. agy has no ask mode: ask runs in default with ASK_PREAMBLE
@@ -429,6 +426,7 @@ export async function runDelegate({
 
   let sessionId;
   let resumeError;
+  let failed;
   let servedModel;
   let effectiveEffort;
   const contextWarnings = [];
@@ -586,6 +584,7 @@ export async function runDelegate({
     if (protocolWarnings.length) out.protocolWarnings = protocolWarnings;
     return out;
   } catch (err) {
+    failed = err;
     // A JSON-RPC code means the agent rejected something rather than the bridge breaking — the
     // distinction a caller needs to tell "fix your arguments" from "retry".
     // -32000 is ACP's auth_required. agy sends it from session/new when no sign-in is stored.
@@ -637,12 +636,13 @@ export async function runDelegate({
     clearInterval(heartbeat);
     signal?.removeEventListener("abort", onAbort);
     try { supervisor.finish(); } catch {}
-    // Deliberately not awaited: stop() waits for the child to exit, and every turn — success as
-    // much as failure — would pay that before returning. Nothing here reads whether it landed.
-    // Graceful first: agy closes the session and its conversation database, and a wedged agent
-    // is still killed once graceMs runs out.
-    // Kept in draining until it settles, so a shutdown inside the grace still reaches the agent.
-    draining.add(client);
-    Promise.resolve(client.stop({ graceMs: GRACEFUL_STOP_MS })).catch(() => {}).finally(() => draining.delete(client));
+    // Awaited, so agy is gone when the caller gets the result: returned during agy's ~400 ms close,
+    // a delegation left a process with the workspace as its cwd, and deleting the workspace right
+    // after failed with EBUSY on Windows. The handle stays registered until then, so a force
+    // cancel or a shutdown in that window still reaches the agent and cuts the grace short.
+    // Graceful when the turn ran its course: agy closes the session and its conversation database.
+    // A stall, an abort or an exit gets the kill at once — a wedged agent would only burn the grace.
+    const killNow = ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
+    try { await client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS }); } catch {}
   }
 }

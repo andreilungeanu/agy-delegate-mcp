@@ -9,7 +9,8 @@ import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient } from "../src/acp-client.js";
-import { runDelegate as rawRunDelegate, readUsage, draining } from "../src/delegate.js";
+import { isChildAlive } from "../src/proc.js";
+import { runDelegate as rawRunDelegate, readUsage } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
@@ -162,20 +163,34 @@ test("runDelegate returns the turn's token usage and the session's context fill"
   assert.deepEqual(out.context, { used: 12, size: 1048576 });
 });
 
-test("a finished delegation lets the agent close its session and exit by itself", async () => {
+// Returned while agy was still closing, a delegation left a process holding the workspace as its
+// cwd: deleting the workspace right after failed with EBUSY on Windows (the live e2e suite).
+test("a finished delegation returns only after the agent has closed its session and exited by itself", async () => {
   let client;
   const out = await runDelegate({
     spec: "do the thing", workspace: process.cwd(),
     clientFactory: () => (client = fakeFactory()),
   });
   assert.equal(out.result, "done");
-  assert.ok(draining.has(client), "shutdown must still be able to reach the agent during its grace");
-  const { code, signal } = client.child.exitCode !== null || client.child.signalCode !== null
-    ? { code: client.child.exitCode, signal: client.child.signalCode }
-    : await new Promise((resolve) => client.once("exit", resolve));
-  assert.deepEqual({ code, signal }, { code: 0, signal: null }, "the agent must exit on its own, not be killed");
-  for (let i = 0; i < 100 && draining.has(client); i++) await new Promise((r) => setTimeout(r, 10));
-  assert.ok(!draining.has(client), "a settled stop leaves the draining set");
+  assert.ok(!isChildAlive(client.child), "the agent must be gone when the result arrives");
+  assert.deepEqual({ code: client.child.exitCode, signal: client.child.signalCode }, { code: 0, signal: null },
+    "the agent must exit on its own, not be killed");
+});
+
+test("a stalled delegation kills the agent without waiting out a grace", async () => {
+  let client;
+  const started = Date.now();
+  await assert.rejects(
+    runDelegate({
+      spec: "task", workspace: process.cwd(), handshakeMs: 300,
+      clientFactory: () => (client = new AcpClient({
+        spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/handshake-hang-stub.js", import.meta.url))], options: { shell: false } },
+      })),
+    }),
+    (err) => err.reason === "handshake-timeout",
+  );
+  assert.ok(!isChildAlive(client.child), "the agent must be gone when the failure arrives");
+  assert.ok(Date.now() - started < 1800, `the failure took ${Date.now() - started} ms`);
 });
 
 test("usage keeps only ACP's numeric token fields, and context only a complete usage_update", async () => {

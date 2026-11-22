@@ -1068,22 +1068,21 @@ test("steer tool forwards the message to a running delegation and reports each s
   }
 });
 
-// A delegation hands its agent to a graceful stop and returns, which drops it from inFlight.
-// A shutdown inside that grace found nothing to stop and exited, leaving an agent that ignores
-// close and EOF running.
-test("shutdown stops an agent still in its graceful stop after the delegation returned", async () => {
+// A finished delegation keeps its handle registered while it waits out agy's graceful stop. A
+// shutdown in that window must kill the agent rather than join the grace.
+test("shutdown kills an agent that is in its graceful stop instead of waiting out the grace", async () => {
   const client = stubClientFactory("close-ignoring-stub.js")();
   await client.start();
   await client.initialize();
   await client.newSession(process.cwd());
-  const draining = new Set([client]);
+  const map = new Map([["sess-wedged", new Set([{ client }])]]);
   client.stop({ graceMs: 10000 });
   const stdin = new EventEmitter();
   let exitedAt;
   const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
   try {
     const started = Date.now();
-    installSignalCleanup(new Map(), { draining, exit: () => { exitedAt = Date.now(); }, stdin });
+    installSignalCleanup(map, { exit: () => { exitedAt = Date.now(); }, stdin });
     stdin.emit("end");
     for (let i = 0; i < 200 && exitedAt === undefined; i++) await new Promise((r) => setTimeout(r, 25));
     assert.ok(exitedAt !== undefined, "shutdown never exited");
