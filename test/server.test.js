@@ -6,8 +6,9 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { Client } from "@modelcontextprotocol/client";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { AcpClient } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 import { runDelegate as realRunDelegate } from "../src/delegate.js";
@@ -28,6 +29,63 @@ function stubClientFactory(stubFile) {
   });
 }
 
+// Through serveStdio, the production entry, in each MCP era it serves: a 2025-era host opens with
+// initialize; a 2026-07-28 one sends its identity and capabilities with every request.
+const ERAS = [["2025", undefined], ["2026-07-28", { mode: { pin: "2026-07-28" } }]];
+async function connectEra(versionNegotiation, serverOpts) {
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const served = serveStdio(() => buildServer(serverOpts), { transport: serverTransport });
+  const client = new Client(
+    { name: "era-host", version: "3" },
+    { capabilities: { elicitation: { form: {} } }, ...(versionNegotiation ? { versionNegotiation } : {}) }
+  );
+  await client.connect(clientTransport);
+  return { client, close: async () => { await client.close(); await served.close(); } };
+}
+
+for (const [era, versionNegotiation] of ERAS) {
+  test(`doctor reports the host's identity on a ${era}-era connection`, async () => {
+    const runDoctor = async ({ getClientInfo }) => getClientInfo();
+    const { client, close } = await connectEra(versionNegotiation, { runDoctor });
+    try {
+      const info = payload(await client.callTool({ name: "doctor", arguments: {} }));
+      assert.equal(info.version?.name, "era-host");
+      assert.deepEqual(info.capabilities?.elicitation, { form: {} });
+    } finally {
+      await close();
+    }
+  });
+
+  test(`delegate sends progress and sees the host's cancellation on a ${era}-era connection`, async () => {
+    let aborted;
+    const runDelegate = async ({ onProgress, onSessionReady, signal }) => {
+      onSessionReady(`sess-${era}`, { cancel: async () => {}, stop: () => true });
+      onProgress("tick");
+      aborted = new Promise((resolve) => signal.addEventListener("abort", () => resolve(true), { once: true }));
+      await aborted;
+      return { result: "", sessionId: `sess-${era}` };
+    };
+    const { client, close } = await connectEra(versionNegotiation, { runDelegate });
+    try {
+      const host = new AbortController();
+      const messages = [];
+      let ticked;
+      const tick = new Promise((resolve) => { ticked = resolve; });
+      const call = client.callTool(
+        { name: "delegate", arguments: { workspace: process.cwd(), spec: "x" } },
+        { signal: host.signal, onprogress: (p) => { messages.push(p.message); if (p.message === "tick") ticked(); } }
+      );
+      await tick;
+      assert.deepEqual(messages, [`session ready: sess-${era}`, "tick"]);
+      host.abort();
+      await assert.rejects(call);
+      assert.equal(await aborted, true, "the host's cancellation must reach the delegation's signal");
+    } finally {
+      await close();
+    }
+  });
+}
+
 test("a finished delegation does not evict a concurrent one holding the same session id", async () => {
   // A resume can race the turn it resumes, so two live delegations can share a session id.
   // The one that finishes first must not deregister the other — cancel then reported a
@@ -40,8 +98,8 @@ test("a finished delegation does not evict a concurrent one holding the same ses
     return { result: "ok", sessionId: "sess-shared" };
   };
   const args = { spec: "task", mode: "agent" };
-  const slow = runDelegateTool({ args, extra: {}, runDelegate: mkDelegate(300), inFlight, seenSessions });
-  const quick = runDelegateTool({ args, extra: {}, runDelegate: mkDelegate(25), inFlight, seenSessions });
+  const slow = runDelegateTool({ args, ctx: {}, runDelegate: mkDelegate(300), inFlight, seenSessions });
+  const quick = runDelegateTool({ args, ctx: {}, runDelegate: mkDelegate(25), inFlight, seenSessions });
 
   await quick;
   assert.equal(inFlight.has("sess-shared"), true, "the still-running delegation must stay registered");
@@ -226,10 +284,10 @@ test("server advertises instructions, output schemas, and conservative tool anno
 test("runDelegateTool sends progress notifications when progressToken is set", async () => {
   const inFlight = new Map();
   const notifications = [];
-  const extra = {
+  const ctx = { mcpReq: {
     _meta: { progressToken: "tok-1" },
-    sendNotification: (n) => { notifications.push(n); },
-  };
+    notify: (n) => { notifications.push(n); },
+  } };
   const runDelegate = async ({ onProgress, onSessionReady }) => {
     onSessionReady("sess-p", { cancel: async () => {} });
     onProgress("tick");
@@ -238,7 +296,7 @@ test("runDelegateTool sends progress notifications when progressToken is set", a
 
   const result = await runDelegateTool({
     args: { spec: "test", mode: "agent", model: "gemini-4-neon" },
-    extra,
+    ctx,
     runDelegate,
     inFlight,
   });
@@ -257,7 +315,7 @@ test("runDelegateTool sends progress notifications when progressToken is set", a
 test("runDelegateTool skips progress notifications when progressToken is absent", async () => {
   const inFlight = new Map();
   let notifyCalls = 0;
-  const extra = { sendNotification: () => { notifyCalls++; } };
+  const ctx = { mcpReq: { notify: () => { notifyCalls++; } } };
   const runDelegate = async ({ onProgress, onSessionReady }) => {
     onSessionReady("sess-q", { cancel: async () => {} });
     onProgress("tick");
@@ -266,7 +324,7 @@ test("runDelegateTool skips progress notifications when progressToken is absent"
 
   const result = await runDelegateTool({
     args: { spec: "test", mode: "agent", model: "gemini-4-neon" },
-    extra,
+    ctx,
     runDelegate,
     inFlight,
   });
@@ -276,12 +334,12 @@ test("runDelegateTool skips progress notifications when progressToken is absent"
   assert.equal(payload(result).result, "ok");
 });
 
-test("runDelegateTool survives sendNotification failures", async () => {
+test("runDelegateTool survives notify failures", async () => {
   const inFlight = new Map();
-  const extra = {
+  const ctx = { mcpReq: {
     _meta: { progressToken: "tok-1" },
-    sendNotification: () => { throw new Error("notify failed"); },
-  };
+    notify: () => { throw new Error("notify failed"); },
+  } };
   const runDelegate = async ({ onProgress, onSessionReady }) => {
     onSessionReady("sess-r", { cancel: async () => {} });
     onProgress("tick");
@@ -290,7 +348,7 @@ test("runDelegateTool survives sendNotification failures", async () => {
 
   const result = await runDelegateTool({
     args: { spec: "test", mode: "agent", model: "gemini-4-neon" },
-    extra,
+    ctx,
     runDelegate,
     inFlight,
   });
@@ -300,14 +358,14 @@ test("runDelegateTool survives sendNotification failures", async () => {
 });
 
 // The sync-throwing stub above never exercised the path that fails: the SDK declares
-// sendNotification async, and a rejection settles outside the try. The assertion is the absence
+// notify async, and a rejection settles outside the try. The assertion is the absence
 // of an unhandledRejection, not the return value.
-test("runDelegateTool survives async sendNotification rejections", async () => {
+test("runDelegateTool survives async notify rejections", async () => {
   const inFlight = new Map();
-  const extra = {
+  const ctx = { mcpReq: {
     _meta: { progressToken: "tok-1" },
-    sendNotification: async () => { throw new Error("Not connected"); },
-  };
+    notify: async () => { throw new Error("Not connected"); },
+  } };
   const runDelegate = async ({ onProgress, onSessionReady }) => {
     onSessionReady("sess-s", { cancel: async () => {} });
     onProgress("tick");
@@ -320,7 +378,7 @@ test("runDelegateTool survives async sendNotification rejections", async () => {
   try {
     const result = await runDelegateTool({
       args: { spec: "test", mode: "agent", model: "gemini-4-neon" },
-      extra,
+      ctx,
       runDelegate,
       inFlight,
     });
@@ -966,7 +1024,7 @@ test("a shutdown during the handshake still kills the agent it spawned", async (
 
   const delegation = runDelegateTool({
     args: { spec: "x", mode: "agent", workspace: process.cwd(), model: "gemini-4-neon" },
-    extra: {},
+    ctx: {},
     runDelegate: (opts) => realRunDelegate({
       ...opts,
       handshakeMs: 30000,
