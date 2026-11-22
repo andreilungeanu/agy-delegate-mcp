@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-22
+
+### Changed
+
+- On Windows the launcher is found first and started by file type. agy.exe runs directly rather
+  than through cmd.exe, so its arguments arrive exactly; a `.ps1` runs through Windows PowerShell; a
+  `.cmd` or `.bat` runs through cmd.exe with its arguments quoted. A Store app alias counts as
+  found, a file with no extension never matches, and a bare name is no longer run from the
+  workspace.
+- In `ACP_AGENT_ARGS` a quoted section after `=` belongs to its argument, so
+  `--log-file="C:\a b\x.log"` is one argument. A quote inside a word stays a character.
+- A resume that omits `model` on a server with no record of the session says so in
+  `protocolWarnings`.
+
+### Fixed
+
+- A launcher path or argument with spaces reaches a `.cmd` launcher whole.
+- `force` cancel kills unsettled turns alongside the other turns' closes, not after them.
+- A delegation cancelled during setup carries `resultSource: "none"`.
+- The unfinished-tool warning and the background wait's progress line name the command still
+  running. The wait's limit is named only when it ran out, and a cancel or steer in its last check
+  is honoured.
+- An effort reply that omits the model keeps the model recorded for the session.
+- An aborted `doctor` spawns no version probe, and an aborted probe returns only once it has
+  closed, also when the abort falls just before its timeout.
+- A signal after stdin closes sets the exit code. A second signal kills every agent shutdown
+  stopped, except one whose exit was already confirmed.
+
 ## [1.5.0] - 2026-11-22
 
 ### Changed

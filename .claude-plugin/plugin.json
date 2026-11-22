@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agy-delegate",
   "displayName": "Antigravity Delegate",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Delegate coding tasks to Antigravity's agy over ACP, with structured results, plan mode, and clarification handling.",
   "author": {
     "name": "Andrei Lungeanu",
