@@ -223,6 +223,43 @@ test("stop() kills the agent's descendants, not only the direct child", async ()
   }
 });
 
+// Exit code 0 is the agent leaving by itself: taskkill /F exits it 1 and SIGKILL sets a signal.
+test("a graceful stop closes the agent's sessions and lets it exit by itself", async () => {
+  const prevTranscript = process.env.AGY_DELEGATE_TRANSCRIPT;
+  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
+  const client = new AcpClient({ spawnSpec: fakeSpawn() });
+  try { await client.start(); }
+  finally {
+    if (prevTranscript === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
+    else process.env.AGY_DELEGATE_TRANSCRIPT = prevTranscript;
+  }
+  await client.initialize();
+  const { sessionId } = await client.newSession(process.cwd());
+  const exit = new Promise((resolve) => client.once("exit", resolve));
+  assert.equal(await client.stop({ graceMs: 5000 }), true);
+  const { code, signal } = await exit;
+  assert.deepEqual({ code, signal }, { code: 0, signal: null }, "the agent must exit on its own, not be killed");
+  const sent = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line));
+  assert.deepEqual(sent.find((f) => f.method === "session/close")?.params, { sessionId });
+});
+
+test("a graceful stop still kills an agent that ignores session/close and EOF", async () => {
+  const client = new AcpClient({
+    spawnSpec: {
+      command: process.execPath,
+      args: [fileURLToPath(new URL("./fixtures/close-ignoring-stub.js", import.meta.url))],
+      options: { shell: false },
+    },
+  });
+  await client.start();
+  await client.initialize();
+  await client.newSession(process.cwd());
+  const started = Date.now();
+  assert.equal(await client.stop({ graceMs: 300 }), true, "the kill after the grace must be observed");
+  assert.ok(!isChildAlive(client.child));
+  assert.ok(Date.now() - started < 3000, `stop took ${Date.now() - started} ms`);
+});
+
 function silentStub() {
   return {
     command: process.execPath,

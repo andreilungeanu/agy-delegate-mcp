@@ -162,6 +162,19 @@ test("runDelegate returns the turn's token usage and the session's context fill"
   assert.deepEqual(out.context, { used: 12, size: 1048576 });
 });
 
+test("a finished delegation lets the agent close its session and exit by itself", async () => {
+  let client;
+  const out = await runDelegate({
+    spec: "do the thing", workspace: process.cwd(),
+    clientFactory: () => (client = fakeFactory()),
+  });
+  assert.equal(out.result, "done");
+  const { code, signal } = client.child.exitCode !== null || client.child.signalCode !== null
+    ? { code: client.child.exitCode, signal: client.child.signalCode }
+    : await new Promise((resolve) => client.once("exit", resolve));
+  assert.deepEqual({ code, signal }, { code: 0, signal: null }, "the agent must exit on its own, not be killed");
+});
+
 test("usage keeps only ACP's numeric token fields, and context only a complete usage_update", async () => {
   const out = await runDelegate({
     spec: "task", workspace: process.cwd(),

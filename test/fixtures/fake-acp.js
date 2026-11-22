@@ -156,6 +156,8 @@ rl.on("line", (line) => {
       return state.mode === "plan" ? planTurn(m) : agentTurn(m);
     case "session/cancel":
       return;
+    case "session/close":
+      return reply(m, {});
     default:
       if (m.id != null) return fail(m, -32601, `Method not found: ${m.method}`);
   }

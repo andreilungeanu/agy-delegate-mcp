@@ -1,6 +1,6 @@
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { AcpClient } from "./acp-client.js";
+import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
 import { commandExists, resolveAcpSpawn } from "./spawn.js";
 import { DETACHED, treeKill } from "./proc.js";
 import { readPackageVersion } from "./version.js";
@@ -130,7 +130,9 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
     clearTimeout(timer);
     // Awaited so doctor does not return while the agent it spawned is still being torn down.
     // A killed child exits in milliseconds; only one that ignores the kill costs the full bound.
-    try { await Promise.resolve(client.stop()); } catch {}
+    // Graceful, so the session the handshake opened is closed; a timed-out handshake already
+    // started the kill above, and stop() joins it.
+    try { await Promise.resolve(client.stop({ graceMs: GRACEFUL_STOP_MS })); } catch {}
   }
 }
 

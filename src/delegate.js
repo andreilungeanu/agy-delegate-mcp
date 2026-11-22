@@ -6,7 +6,7 @@ import { statSync, realpathSync } from "node:fs";
 // its progress stream. The statSync calls below stay sync — they are argument validation and
 // run before the spawn.
 import { readFile } from "node:fs/promises";
-import { AcpClient } from "./acp-client.js";
+import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
 import { DEFAULT_HARD_CAP_MS, SessionSupervisor } from "./session-supervisor.js";
 import { normalizeAgentReportedFiles } from "./agent-reported-files.js";
 import { makeTurnState } from "./turn-state.js";
@@ -603,6 +603,8 @@ export async function runDelegate({
     try { supervisor.finish(); } catch {}
     // Deliberately not awaited: stop() waits for the child to exit, and every turn — success as
     // much as failure — would pay that before returning. Nothing here reads whether it landed.
-    Promise.resolve(client.stop()).catch(() => {});
+    // Graceful first: agy closes the session and its conversation database, and a wedged agent
+    // is still killed once graceMs runs out.
+    Promise.resolve(client.stop({ graceMs: GRACEFUL_STOP_MS })).catch(() => {});
   }
 }

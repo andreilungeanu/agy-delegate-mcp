@@ -12,6 +12,8 @@ const STDERR_CAP = 64 * 1024;
 // How long stop() waits for the child to actually exit after the kill is dispatched. SIGKILL and
 // taskkill /F land in milliseconds, so this only ever elapses when the kill did not work.
 const STOP_EXIT_TIMEOUT_MS = 2000;
+// How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
+export const GRACEFUL_STOP_MS = 2000;
 
 export class AcpClient extends EventEmitter {
   /**
@@ -31,6 +33,9 @@ export class AcpClient extends EventEmitter {
     this._stderrLength = 0;
     /** @type {Promise<boolean> | null} */
     this._stopping = null;
+    // Sessions opened on this process, which a graceful stop closes.
+    /** @type {Set<string>} */
+    this._sessions = new Set();
   }
 
   // stderr is captured but does not count as activity: the supervisor measures ACP frames, and
@@ -140,10 +145,18 @@ export class AcpClient extends EventEmitter {
     this.sessionMeta = res?._meta;
     return res;
   }
-  async newSession(cwd) { return this._captureSession(await this.peer.request("session/new", { cwd, mcpServers: [] })); }
+  async newSession(cwd) {
+    const res = this._captureSession(await this.peer.request("session/new", { cwd, mcpServers: [] }));
+    if (typeof res?.sessionId === "string") this._sessions.add(res.sessionId);
+    return res;
+  }
   // resume reopens a session without replaying it. Unlike session/load, which agy answers with a
   // fresh session for an id it has never seen, resume rejects an unknown id.
-  async resumeSession(sessionId, cwd) { return this._captureSession(await this.peer.request("session/resume", { sessionId, cwd, mcpServers: [] })); }
+  async resumeSession(sessionId, cwd) {
+    const res = this._captureSession(await this.peer.request("session/resume", { sessionId, cwd, mcpServers: [] }));
+    this._sessions.add(sessionId);
+    return res;
+  }
   // agy returns every session the account has, ignoring cwd, in one page.
   listSessions(params = {}) { return this.peer.request("session/list", params); }
   setModel(sessionId, modelId) { return this.peer.request("session/set_model", { sessionId, modelId }); }
@@ -158,9 +171,12 @@ export class AcpClient extends EventEmitter {
 
   // Idempotent while teardown is in flight and after a confirmed exit. A missed exit is not
   // memoized — force retries with a new treeKill. A confirmed exit stays so later callers join.
-  stop({ timeoutMs = STOP_EXIT_TIMEOUT_MS } = {}) {
+  // graceMs > 0 first closes agy's sessions and its stdin and gives it that long to exit by
+  // itself; the tree kill follows either way. agy exits 0 in 200–400 ms that way and closes its
+  // conversation database, where a kill leaves its -shm and -wal files (measured, agy 1.5.14).
+  stop({ timeoutMs = STOP_EXIT_TIMEOUT_MS, graceMs = 0 } = {}) {
     if (!this._stopping) {
-      this._stopping = this._teardown(timeoutMs).then((observed) => {
+      this._stopping = this._teardown(timeoutMs, graceMs).then((observed) => {
         if (!observed) this._stopping = null;
         return observed;
       }, (err) => {
@@ -171,12 +187,32 @@ export class AcpClient extends EventEmitter {
     return this._stopping;
   }
 
-  async _teardown(timeoutMs) {
+  // session/close stops the session's background commands and subagents, which a cancel leaves
+  // running (agy 1.5.10 changelog); closing stdin then ends agy. Bounded as a whole by graceMs.
+  async _closeGracefully(child, graceMs) {
+    /** @type {NodeJS.Timeout | undefined} */
+    let timer;
+    const deadline = new Promise((resolve) => { timer = setTimeout(resolve, graceMs); });
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    try {
+      if (this.agentCapabilities?.sessionCapabilities?.close && this.peer) {
+        const closes = [...this._sessions].map((sessionId) => this.peer.request("session/close", { sessionId }).catch(() => {}));
+        await Promise.race([Promise.all(closes), deadline, exited]);
+      }
+      try { child.stdin.end(); } catch {}
+      await Promise.race([deadline, exited]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async _teardown(timeoutMs, graceMs = 0) {
     const child = this.child;
     if (!child?.pid) {
       try { this.peer?.close(); } catch {}
       return true;
     }
+    if (graceMs > 0 && isChildAlive(child)) await this._closeGracefully(child, graceMs);
     const alive = isChildAlive(child);
     // Subscribed before the kill is dispatched. A child that dies immediately would otherwise
     // exit in the gap and leave this waiting on an event that has already fired.
