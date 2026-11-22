@@ -1,3 +1,4 @@
+import process from "node:process";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
@@ -222,6 +223,15 @@ export class AcpClient extends EventEmitter {
     this.peer.notify("session/cancel", { sessionId });
     this.emit("cancel");
     return Promise.resolve();
+  }
+
+  // Synchronous last resort for a process about to exit: SIGKILL to the agent's group and to the
+  // agent, with no ps walk. POSIX only; on win32 the kill is taskkill, which stop() runs.
+  killNow() {
+    const pid = this.child?.pid;
+    if (!pid || process.platform === "win32") return;
+    try { process.kill(-pid, "SIGKILL"); } catch {}
+    if (isChildAlive(this.child)) { try { process.kill(pid, "SIGKILL"); } catch {} }
   }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }

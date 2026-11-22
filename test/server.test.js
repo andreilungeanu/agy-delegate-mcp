@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -1336,5 +1338,41 @@ test("delegate trims resumeSessionId and treats a blank one as none", async () =
     assert.deepEqual(seen, ["sess-1", undefined]);
   } finally {
     await client.close();
+  }
+});
+
+// A second signal exits at once, and on POSIX the first stop was still walking the tree with ps
+// then, with nothing signalled yet: the agent outlived the server. The groups are now killed
+// synchronously on the way out. A ps that answers late holds the first stop in that walk.
+test("a second signal kills the agents before exiting", { skip: process.platform === "win32" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-ps-shim-"));
+  writeFileSync(join(dir, "ps"), '#!/bin/sh\nout=$(/bin/ps "$@")\nsleep 2\nprintf "%s\n" "$out"\n');
+  chmodSync(join(dir, "ps"), 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${dir}:${savedPath}`;
+  const client = new AcpClient({
+    spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/silent-stub.js", import.meta.url))], options: { shell: false } },
+  });
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    await client.start();
+    const exited = [];
+    installSignalCleanup(new Map([["sess-1", new Set([{ client }])]]), { exit: (code) => exited.push(code), setExitCode: () => {}, stdin: new EventEmitter() });
+    process.emit("SIGTERM");
+    await new Promise((r) => setTimeout(r, 100));
+    process.emit("SIGINT");
+    assert.deepEqual(exited, [130]);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(!isChildAlive(client.child), "the agent must be killed before the server exits");
+  } finally {
+    process.env.PATH = savedPath;
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+    await client.stop();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

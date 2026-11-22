@@ -466,7 +466,14 @@ export function installSignalCleanup(map, {
     // has asked twice wants out now. A stdin EOF is not an ask of its own: a hangup closes stdin
     // and sends SIGHUP, in either order.
     if (fromSignal) signalsSeen++;
-    if (shuttingDown) return signalsSeen >= 2 ? exit(code) : undefined;
+    if (shuttingDown) {
+      if (signalsSeen < 2) return undefined;
+      // The first stops may still be walking the tree with ps; kill the groups before leaving.
+      for (const handles of [...map.values(), pending]) {
+        for (const handle of handles) { try { handle.client.killNow?.(); } catch {} }
+      }
+      return exit(code);
+    }
     shuttingDown = true;
     // Set in the handler, not left to the exit below: a loop that runs dry on its own still
     // has to die with the code the signal asked for, and the scheduled exit may never get a
