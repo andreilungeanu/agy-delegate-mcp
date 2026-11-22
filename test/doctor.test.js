@@ -4,6 +4,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { runDoctor as rawRunDoctor } from "../src/doctor.js";
+import { AcpClient } from "../src/acp-client.js";
+import { isChildAlive } from "../src/proc.js";
 import { doctorOutputShape, doctorAgentShape, doctorHandshakeShape } from "../src/server.js";
 import { VERSION } from "../src/version.js";
 
@@ -392,4 +394,28 @@ test("runDoctor deep:true lists agy's base model ids and reports the account tie
     { id: "thought_level", name: "Thinking Level", category: "thought_level", values: ["low", "high"], currentValue: "high" },
   ]);
   assert.deepEqual(out.agent.handshake.tier, { name: "Google AI Pro", id: "g1-pro-tier" });
+});
+
+// doctor ran its handshake with no way in from the host: an interrupt left the agent to the
+// handshake timeout, and shutdown could not see it at all.
+test("runDoctor deep stops the agent at once when the host aborts", async () => {
+  const controller = new AbortController();
+  let client;
+  let readied;
+  const started = Date.now();
+  setTimeout(() => controller.abort(), 200);
+  const out = await rawRunDoctor({
+    deep: true, signal: controller.signal, handshakeTimeoutMs: 10000,
+    spawnSpec: { command: process.execPath, args: ["--version"], options: { shell: false } },
+    clientFactory: (opts) => (client = new AcpClient({
+      ...opts,
+      spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/handshake-hang-stub.js", import.meta.url))], options: { shell: false } },
+    })),
+    onClientReady: (c) => { readied = c; },
+  });
+  assert.ok(Date.now() - started < 3000, `doctor took ${Date.now() - started} ms after the abort`);
+  assert.equal(out.agent.handshake.ok, false);
+  assert.match(out.agent.handshake.error, /aborted/);
+  assert.equal(readied, client, "the agent must be handed out so shutdown can reach it");
+  assert.ok(!isChildAlive(client.child));
 });

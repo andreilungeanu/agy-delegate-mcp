@@ -84,10 +84,13 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
   });
 }
 
-async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs }) {
+async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs, signal, onClientReady }) {
   const workspaceDir = workspace || process.cwd();
   const client = clientFactory({ spawnSpec, cwd: workspaceDir });
+  // Handed out before the spawn, as delegate does, so a server shutdown can stop it.
+  onClientReady?.(client);
   let timer;
+  let onAbort;
   try {
     const details = {};
     const work = (async () => {
@@ -122,12 +125,22 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
         reject(new Error(`Handshake timed out after ${timeoutMs}ms`));
       }, timeoutMs);
     });
-    await Promise.race([work, timeout]);
+    // A host interrupt stops the agent at once rather than leaving it to the handshake timeout.
+    const aborted = new Promise((_, reject) => {
+      onAbort = () => {
+        try { Promise.resolve(client.stop()).catch(() => {}); } catch {}
+        reject(new Error("Handshake aborted by MCP host"));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    await Promise.race([work, timeout, aborted]);
     return { ok: true, ...details };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   } finally {
     clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
     // Awaited so doctor does not return while the agent it spawned is still being torn down.
     // A killed child exits in milliseconds; only one that ignores the kill costs the full bound.
     // Graceful, so the session the handshake opened is closed; a timed-out handshake already
@@ -146,6 +159,8 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
  *   handshakeTimeoutMs?: number,
  *   versionTimeoutMs?: number,
  *   readVersion?: () => string,
+ *   signal?: AbortSignal,
+ *   onClientReady?: (client: any) => void,
  * }} [opts]
  */
 export async function runDoctor({
@@ -157,6 +172,8 @@ export async function runDoctor({
   handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS,
   versionTimeoutMs = VERSION_PROBE_TIMEOUT_MS,
   readVersion = readPackageVersion,
+  signal,
+  onClientReady,
 } = {}) {
   const { capabilities, version } = getClientInfo();
   const agentProbe = await probeAgentVersion(spawnSpec, versionTimeoutMs);
@@ -200,6 +217,8 @@ export async function runDoctor({
       clientFactory,
       workspace,
       timeoutMs: handshakeTimeoutMs,
+      signal,
+      onClientReady,
     });
   }
 
