@@ -70,21 +70,25 @@ test("resolveAcpSpawn honors ACP_AGENT_ARGS with quoted segments", () => {
 
 test("commandExists finds a launcher on PATH with and without a PATHEXT extension", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "cmd-exists-"));
-  writeFileSync(path.join(dir, "fakeagy.cmd"), "@echo off\n");
-  writeFileSync(path.join(dir, "plainagy"), "");
-  mkdirSync(path.join(dir, "dironly"));
-  const env = { Path: ["/nowhere", dir].join(path.delimiter), PATHEXT: ".EXE;.CMD" };
-  assert.equal(commandExists("fakeagy", env), true, "bare name resolves through PATHEXT");
-  assert.equal(commandExists("fakeagy.cmd", env), true, "name with its extension");
-  // cmd does not run a file with no extension ("is not recognized", measured); npm installs an sh
-  // script of that name beside the .cmd.
-  assert.equal(commandExists("plainagy", env), process.platform !== "win32", "extensionless file");
-  assert.equal(commandExists("dironly", env), false, "a directory is not a launcher");
-  assert.equal(commandExists("missingagy", env), false);
-  assert.equal(commandExists(path.join(dir, "fakeagy"), env), true, "a path is checked as given");
-  assert.equal(commandExists(`"${path.join(dir, "fakeagy.cmd")}"`, env), true, "quotes are stripped");
-  assert.equal(commandExists(path.join(dir, "missingagy"), env), false);
-  assert.equal(commandExists("", env), false);
+  try {
+    writeFileSync(path.join(dir, "fakeagy.cmd"), "@echo off\n");
+    writeFileSync(path.join(dir, "plainagy"), "");
+    mkdirSync(path.join(dir, "dironly"));
+    const env = { Path: ["/nowhere", dir].join(path.delimiter), PATHEXT: ".EXE;.CMD" };
+    assert.equal(commandExists("fakeagy", env), true, "bare name resolves through PATHEXT");
+    assert.equal(commandExists("fakeagy.cmd", env), true, "name with its extension");
+    // cmd does not run a file with no extension ("is not recognized", measured); npm installs an sh
+    // script of that name beside the .cmd.
+    assert.equal(commandExists("plainagy", env), process.platform !== "win32", "extensionless file");
+    assert.equal(commandExists("dironly", env), false, "a directory is not a launcher");
+    assert.equal(commandExists("missingagy", env), false);
+    assert.equal(commandExists(path.join(dir, "fakeagy"), env), true, "a path is checked as given");
+    assert.equal(commandExists(`"${path.join(dir, "fakeagy.cmd")}"`, env), true, "quotes are stripped");
+    assert.equal(commandExists(path.join(dir, "missingagy"), env), false);
+    assert.equal(commandExists("", env), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // spawn accepts a missing args array; the shell command line built for DEP0190 has to as well.
