@@ -168,15 +168,17 @@ export const delegateInputSchema = z.object({
 });
 
 // Every turn running on the id is steered, as cancel cancels every one: the caller named a
-// session. A delegation still setting up its session takes no steer until its prompt is out.
+// session. A delegation still setting up takes no steer until its prompt is out (not-ready); one
+// whose turn ended, was cancelled or lost its agent, but is still tearing down, is not-running.
 export function steerSession(map, seen, sessionId, message) {
   const handles = map.get(sessionId);
   if (!handles || handles.size === 0) return seen.has(sessionId) ? "not-running" : "not-found";
-  let sent = false;
+  const statuses = new Set();
   for (const handle of handles) {
-    try { if (handle.client.steer?.(sessionId, message)) sent = true; } catch {}
+    try { statuses.add(handle.client.steer?.(sessionId, message) ?? "not-running"); } catch { statuses.add("not-running"); }
   }
-  return sent ? "steered" : "not-ready";
+  for (const status of ["steered", "not-ready"]) if (statuses.has(status)) return status;
+  return "not-running";
 }
 
 /**

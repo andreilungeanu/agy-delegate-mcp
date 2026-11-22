@@ -36,7 +36,10 @@ export class AcpClient extends EventEmitter {
     // Sessions opened on this process, which a graceful stop closes.
     /** @type {Set<string>} */
     this._sessions = new Set();
-    this._steerable = false;
+    // "setup" until the delegation's prompt is on the wire, "open" while its turn runs, "closed"
+    // for good after: the turn ended, was cancelled, or the agent exited. steer reports which.
+    /** @type {"setup" | "open" | "closed"} */
+    this._steerWindow = "setup";
     /** @type {Promise<any>[]} */
     this._steers = [];
   }
@@ -92,7 +95,7 @@ export class AcpClient extends EventEmitter {
       if (this._exitEmitted) return;
       this._exitEmitted = true;
       // A steer to an exited agent has nowhere to go.
-      this._steerable = false;
+      this._steerWindow = "closed";
       const stderr = this.stderrBuffer;
       const err = makeError(
         "agent-exit",
@@ -179,22 +182,31 @@ export class AcpClient extends EventEmitter {
   // (measured, agy 1.5.14). The delegation opens this window only while its prompt runs, so a
   // steer can neither precede the task nor land after the delegation has read its result.
   // prefix goes ahead of every steer's text, as ask mode's instruction goes ahead of the spec.
-  acceptSteers(on, prefix) { this._steerable = on; this._steerPrefix = prefix; }
+  // Opening only moves on from setup: a window closed by a cancel or an exit stays closed.
+  acceptSteers(on, prefix) {
+    if (!on) { this._steerWindow = "closed"; return; }
+    if (this._steerWindow === "setup" && !this.cancelRequested && !this._exitEmitted) {
+      this._steerWindow = "open";
+      this._steerPrefix = prefix;
+    }
+  }
+  /** @returns {"steered" | "not-ready" | "not-running"} */
   steer(sessionId, text) {
-    if (!this._steerable || !this.peer) return false;
+    if (this._steerWindow === "setup") return "not-ready";
+    if (this._steerWindow !== "open" || !this.peer) return "not-running";
     const body = this._steerPrefix ? `${this._steerPrefix}\n\n${text}` : text;
     const reply = this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] });
     // The delegation awaits it; this keeps a rejection it never reaches from going unhandled.
     reply.catch(() => {});
     this._steers.push(reply);
-    return true;
+    return "steered";
   }
   hasSteer() { return this._steers.length > 0; }
   takeSteer() { return this._steers.shift(); }
   // Recorded so a delegation waiting on a backgrounded command can stop waiting: after a cancel
   // agy closes the call without the usage_update that ends a continuation.
   // A cancel also closes the steer window: a steer accepted after it restarted the cancelled turn.
-  cancel(sessionId) { this.cancelRequested = true; this._steerable = false; this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }
+  cancel(sessionId) { this.cancelRequested = true; this._steerWindow = "closed"; this.peer.notify("session/cancel", { sessionId }); return Promise.resolve(); }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 

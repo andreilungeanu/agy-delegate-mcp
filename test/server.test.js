@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { AcpClient } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 import { runDelegate as realRunDelegate } from "../src/delegate.js";
-import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup } from "../src/server.js";
+import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup, steerSession } from "../src/server.js";
 
 // Every tool returns its payload as one compact JSON text block and no structuredContent, so
 // every assertion on their fields goes through here.
@@ -1038,7 +1038,7 @@ test("steer tool forwards the message to a running delegation and reports each s
   const runDelegate = async ({ onSessionReady }) => {
     onSessionReady("sess-steer", {
       cancel: async () => {},
-      steer: (sid, text) => { if (!accepting) return false; received.push([sid, text]); return true; },
+      steer: (sid, text) => { if (!accepting) return "not-ready"; received.push([sid, text]); return "steered"; },
     });
     sessionReady();
     await gate;
@@ -1096,4 +1096,14 @@ test("shutdown kills an agent that is in its graceful stop instead of waiting ou
     }
     if (isChildAlive(client.child)) await client.stop();
   }
+});
+
+test("steer reports not-running for a registered delegation whose turn is over", () => {
+  const client = new AcpClient({ spawnSpec: { command: process.execPath, args: [], options: {} } });
+  client.acceptSteers(false);
+  const map = new Map([["sess-done", new Set([{ client }])]]);
+  assert.equal(steerSession(map, new Set(["sess-done"]), "sess-done", "go"), "not-running");
+  const fresh = new AcpClient({ spawnSpec: { command: process.execPath, args: [], options: {} } });
+  map.set("sess-new", new Set([{ client: fresh }]));
+  assert.equal(steerSession(map, new Set(), "sess-new", "go"), "not-ready");
 });

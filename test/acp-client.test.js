@@ -294,7 +294,22 @@ test("an agent that exits closes the steer window", async () => {
   const exited = new Promise((resolve) => client.once("exit", resolve));
   process.kill(client.child.pid);
   await exited;
-  assert.equal(client.steer(sessionId, "go left"), false);
+  assert.equal(client.steer(sessionId, "go left"), "not-running");
+  await client.stop();
+});
+
+// Collapsed into one flag, "not opened yet" and "closed for good" both read as not-ready, which
+// tells the caller to retry a turn that has already ended.
+test("steer reports not-ready before the window opens and not-running once it has closed", async () => {
+  const client = new AcpClient({ spawnSpec: fakeSpawn() });
+  await client.start();
+  await client.initialize();
+  const { sessionId } = await client.newSession(process.cwd());
+  assert.equal(client.steer(sessionId, "x"), "not-ready");
+  client.cancel(sessionId);
+  assert.equal(client.steer(sessionId, "x"), "not-running");
+  client.acceptSteers(true);
+  assert.equal(client.steer(sessionId, "x"), "not-running", "a cancelled window must not reopen");
   await client.stop();
 });
 

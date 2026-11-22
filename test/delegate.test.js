@@ -1701,7 +1701,7 @@ test("a cancel during the background wait ends it at once and reports cancelled"
 async function steerWhenOpen(getClient, sessionId, text) {
   for (let i = 0; i < 200; i++) {
     const client = getClient();
-    if (client?.steer(sessionId, text)) return;
+    if (client?.steer(sessionId, text) === "steered") return;
     await new Promise((r) => setTimeout(r, 10));
   }
   assert.fail("the delegation never accepted a steer");
@@ -1730,9 +1730,9 @@ test("a steer is refused before the prompt is sent and after the delegation has 
     clientFactory: () => (client = fakeFactory()),
     onSessionReady: (sid) => { early = client.steer(sid, "too soon"); },
   });
-  assert.equal(early, false);
+  assert.equal(early, "not-ready");
   assert.equal(out.result, "done");
-  assert.equal(client.steer(out.sessionId, "too late"), false);
+  assert.equal(client.steer(out.sessionId, "too late"), "not-running");
 });
 
 test("a steer during the background wait ends the wait and returns the steered reply", async () => {
@@ -1748,13 +1748,13 @@ test("a steer during the background wait ends the wait and returns the steered r
       client.hasSteer = () => steers.length > 0;
       client.takeSteer = () => steers.shift();
       client.steer = (_sid, text) => {
-        if (!open) return false;
+        if (!open) return "not-ready";
         steers.push((async () => {
           client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "failed" } });
           client.emit("update", { update: msgChunk(`steered: ${text}`) });
           return { stopReason: "end_turn" };
         })());
-        return true;
+        return "steered";
       };
       clientRef = client;
       return client;
@@ -1782,7 +1782,7 @@ test("a steer cannot reach agy before the task prompt", async () => {
       spec: "STEERABLE task", workspace: dir, contextFiles: [image],
       clientFactory: () => (client = fakeFactory()),
       onSessionReady: (sid) => {
-        const poll = () => { if (polling && !client.steer(sid, "go left")) setImmediate(poll); };
+        const poll = () => { if (polling && client.steer(sid, "go left") !== "steered") setImmediate(poll); };
         poll();
       },
     });
@@ -1805,14 +1805,14 @@ test("a steer after a cancel is refused, so the cancelled turn stays cancelled",
     clientFactory: () => (client = fakeFactory()),
     onSessionReady: (sid) => {
       const poll = () => {
-        if (!client._steerable) return setTimeout(poll, 5);
+        if (client._steerWindow !== "open") return setTimeout(poll, 5);
         client.cancel(sid);
         steerAfterCancel = client.steer(sid, "go left");
       };
       poll();
     },
   });
-  assert.equal(steerAfterCancel, false);
+  assert.equal(steerAfterCancel, "not-running");
   assert.equal(out.stopReason, "cancelled");
   assert.doesNotMatch(out.result, /STEERED/);
 });
