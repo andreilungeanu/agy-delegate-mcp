@@ -203,7 +203,10 @@ export class AcpClient extends EventEmitter {
   // graceMs > 0 first closes agy's sessions and its stdin and gives it that long to exit by
   // itself; the tree kill follows either way. agy exits 0 in 200–400 ms that way and closes its
   // conversation database, where a kill leaves its -shm and -wal files (measured, agy 1.5.14).
+  // A force stop (graceMs 0) that finds a graceful one in progress ends its grace now rather than
+  // waiting it out: force cancel and shutdown mean "kill".
   stop({ timeoutMs = STOP_EXIT_TIMEOUT_MS, graceMs = 0 } = {}) {
+    if (this._stopping && graceMs <= 0) this._endGrace?.();
     if (!this._stopping) {
       this._stopping = this._teardown(timeoutMs, graceMs).then((observed) => {
         if (!observed) this._stopping = null;
@@ -221,7 +224,11 @@ export class AcpClient extends EventEmitter {
   async _closeGracefully(child, graceMs) {
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
-    const deadline = new Promise((resolve) => { timer = setTimeout(resolve, graceMs); });
+    const deadline = new Promise((resolve) => {
+      timer = setTimeout(resolve, graceMs);
+      /** @type {(() => void) | null} */
+      this._endGrace = () => resolve(undefined);
+    });
     const exited = new Promise((resolve) => child.once("exit", resolve));
     try {
       if (this.agentCapabilities?.sessionCapabilities?.close && this.peer) {
@@ -232,6 +239,7 @@ export class AcpClient extends EventEmitter {
       await Promise.race([deadline, exited]);
     } finally {
       clearTimeout(timer);
+      this._endGrace = null;
     }
   }
 

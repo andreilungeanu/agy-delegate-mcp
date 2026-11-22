@@ -266,6 +266,25 @@ test("newSession sends an appended system prompt only when asked for one", async
   }
 });
 
+test("a force stop cuts a graceful stop's grace short", async () => {
+  const client = new AcpClient({
+    spawnSpec: {
+      command: process.execPath,
+      args: [fileURLToPath(new URL("./fixtures/close-ignoring-stub.js", import.meta.url))],
+      options: { shell: false },
+    },
+  });
+  await client.start();
+  await client.initialize();
+  await client.newSession(process.cwd());
+  const graceful = client.stop({ graceMs: 10000 });
+  await new Promise((r) => setTimeout(r, 100));
+  const started = Date.now();
+  assert.equal(await client.stop(), true, "the force stop must observe the exit");
+  assert.ok(Date.now() - started < 3000, `the force stop waited ${Date.now() - started} ms on the grace`);
+  assert.equal(await graceful, true);
+});
+
 test("an agent that exits closes the steer window", async () => {
   const client = new AcpClient({ spawnSpec: fakeSpawn() });
   await client.start();
