@@ -82,6 +82,15 @@ export const delegateOutputShape = {
   context: z.object({ used: z.number(), size: z.number() }).strict().optional(),
   sessionId: z.string(),
   filesReportedByEditTools: z.array(z.string()).optional(),
+  execution: z.object({
+    toolCalls: z.record(z.string(), z.number()),
+    commands: z.array(z.object({
+      command: z.string(),
+      exitCode: z.number().optional(),
+      status: z.string().optional(),
+    }).strict()).optional(),
+    commandsOmitted: z.number().optional(),
+  }).strict().optional(),
   resumed: z.boolean().optional(),
   cancelRequested: z.boolean().optional(),
   protocolWarnings: z.array(z.string()).optional(),

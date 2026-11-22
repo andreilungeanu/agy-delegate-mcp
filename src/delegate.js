@@ -197,6 +197,35 @@ export function readUsage(raws) {
   return { scope: "turn", ...Object.fromEntries(fields.map((k) => [k, reported.reduce((sum, raw) => sum + (isTokenCount(raw[k]) ? raw[k] : 0), 0)])) };
 }
 
+// The newest commands are kept: a test run usually comes last.
+export const MAX_REPORTED_COMMANDS = 20;
+const MAX_COMMAND_CHARS = 300;
+
+// What the agent did, from its tool calls: a count per ACP kind and the commands it ran with the
+// exit code agy reported. A non-zero exit still arrives as completed, so exitCode is the outcome;
+// status appears only for a command that did not complete. agy's own files (the plan) are
+// reported as plan and artifacts instead.
+export function executionSummary(records) {
+  const calls = [...records.values()].filter((r) => !r.artifact);
+  if (!calls.length) return undefined;
+  /** @type {Record<string, number>} */
+  const toolCalls = {};
+  for (const r of calls) toolCalls[r.kind || "other"] = (toolCalls[r.kind || "other"] ?? 0) + 1;
+  const commands = calls.filter((r) => r.kind === "execute").map((r) => {
+    const text = String(r.command ?? r.title ?? "");
+    return {
+      command: text.length > MAX_COMMAND_CHARS ? text.slice(0, MAX_COMMAND_CHARS) + "…" : text,
+      ...(r.exitCode !== undefined ? { exitCode: r.exitCode } : {}),
+      ...(r.status !== undefined && r.status !== "completed" ? { status: r.status } : {}),
+    };
+  });
+  /** @type {{ toolCalls: Record<string, number>, commands?: any[], commandsOmitted?: number }} */
+  const out = { toolCalls };
+  if (commands.length) out.commands = commands.slice(-MAX_REPORTED_COMMANDS);
+  if (commands.length > MAX_REPORTED_COMMANDS) out.commandsOmitted = commands.length - MAX_REPORTED_COMMANDS;
+  return out;
+}
+
 function modelOption(configOptions) {
   return (Array.isArray(configOptions) ? configOptions : []).find((o) => o?.id === "model");
 }
@@ -373,6 +402,7 @@ export async function runDelegate({
     if (up.sessionUpdate === "tool_call" || up.sessionUpdate === "tool_call_update") {
       // An artifact is agy's own file (the plan, in its brain directory), not a workspace edit.
       const isArtifact = state.recordArtifact(up.rawInput ?? up.args);
+      state.recordToolCall(up, isArtifact);
       if (up.sessionUpdate === "tool_call") {
         state.startTool(up.toolCallId, up.status, up.name ?? up.title);
         const label = String(up.title || up.kind || "tool");
@@ -592,6 +622,8 @@ export async function runDelegate({
     // Absent means nothing reported, not nothing changed: shell edits emit no diff.
     const filesReported = normalizeAgentReportedFiles([...state.touched], workspace);
     if (filesReported.length) out.filesReportedByEditTools = filesReported;
+    const execution = executionSummary(state.toolCallRecords);
+    if (execution) out.execution = execution;
     // resultSource appears only as a caveat; resumed only when a resume took.
     if (resultSource !== "post-tool" && resultSource !== "tool-free-stream") out.resultSource = resultSource;
     if (!!resumeSessionId && sessionId === resumeSessionId) out.resumed = true;

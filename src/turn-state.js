@@ -69,6 +69,9 @@ function freshFields() {
     // ~/.gemini/antigravity-cli/brain/<sessionId>/. Keyed by path, so a rewrite replaces.
     artifacts: new Map(),
     touched: new Set(),
+    // One record per tool call id, in first-seen order, for the execution summary: agy re-sends
+    // finished calls, so its frames merge rather than add.
+    toolCallRecords: new Map(),
     lastToolLabel: null,
     sessionTitle: undefined,
   };
@@ -153,6 +156,24 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
     // the last one finished.
     collectingResult() {
       return !state.sawToolCall || (state.collectingPostToolResult && state.activeToolCalls.size === 0);
+    },
+
+    // Merges one tool_call or tool_call_update frame into its call's record. A re-sent non-terminal
+    // status does not reopen a finished call; a fresh tool_call for its id does (agy reusing it).
+    recordToolCall(up, isArtifact) {
+      const id = up?.toolCallId;
+      if (id == null) return;
+      const rec = state.toolCallRecords.get(id) ?? {};
+      if (isArtifact) rec.artifact = true;
+      if (typeof up.kind === "string" && up.kind) rec.kind = up.kind;
+      if (typeof up.title === "string" && up.title) rec.title = up.title;
+      if (typeof up.rawInput?.CommandLine === "string") rec.command = up.rawInput.CommandLine;
+      if (Number.isInteger(up.rawOutput?.exit_code)) rec.exitCode = up.rawOutput.exit_code;
+      if (typeof up.status === "string"
+        && (up.sessionUpdate === "tool_call" || isTerminalToolStatus(up.status) || !isTerminalToolStatus(rec.status))) {
+        rec.status = up.status;
+      }
+      state.toolCallRecords.set(id, rec);
     },
 
     // The artifact's content arrives whole in rawInput.Content; Path is where agy saved it.

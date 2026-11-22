@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
-import { runDelegate as rawRunDelegate, readUsage } from "../src/delegate.js";
+import { runDelegate as rawRunDelegate, readUsage, MAX_REPORTED_COMMANDS } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
@@ -392,6 +392,68 @@ async function collectProgress(updates, opts = {}) {
   });
   return progress;
 }
+
+// Frames as agy 1.5.14 sends them (docs/captures): run_command carries CommandLine in rawInput and
+// exit_code in rawOutput, and a non-zero exit still finishes as completed.
+const runCommand = (id, command, status = "in_progress", exitCode) => ({
+  sessionUpdate: status === "in_progress" ? "tool_call" : "tool_call_update", toolCallId: id, name: "run_command",
+  kind: "execute", status, title: command, rawInput: { CommandLine: command, WaitMsBeforeAsync: 5000 },
+  ...(exitCode !== undefined ? { rawOutput: { output: `Command exited with code ${exitCode}.`, exit_code: exitCode } } : {}),
+});
+const readFileCall = (id, status) => ({
+  sessionUpdate: status === "in_progress" ? "tool_call" : "tool_call_update", toolCallId: id, name: "read_file",
+  kind: "read", status, title: "File a.js", rawInput: { Path: "a.js" },
+});
+
+test("execution counts each tool call once by kind and lists commands with agy's exit codes", async () => {
+  const plan = { ArtifactMetadata: { Summary: "plan" }, Content: "# plan", Path: path.join(tmpdir(), "brain", "plan.md") };
+  const out = await replayResult([
+    readFileCall("r1", "in_progress"),
+    readFileCall("r1", "completed"),
+    runCommand("c1", "npm test", "in_progress"),
+    runCommand("c1", "npm test", "completed", 1),
+    runCommand("c2", "npm test", "in_progress"),
+    runCommand("c2", "npm test", "completed", 0),
+    { sessionUpdate: "tool_call", toolCallId: "w1", name: "write_file", kind: "edit", status: "completed", rawInput: plan },
+    { sessionUpdate: "tool_call", toolCallId: "q1", name: "ask_question", kind: "other", status: "completed", rawInput: { questions: [] } },
+    // agy re-sends finished calls at the end of a turn; a stale in_progress does not reopen one.
+    readFileCall("r1", "completed"),
+    { ...runCommand("c1", "npm test", "completed", 1), sessionUpdate: "tool_call" },
+    { ...runCommand("c2", "npm test", "in_progress"), sessionUpdate: "tool_call_update" },
+    msgChunk("Tests pass."),
+  ]);
+  assert.deepEqual(out.execution, {
+    toolCalls: { read: 1, execute: 2, other: 1 },
+    commands: [{ command: "npm test", exitCode: 1 }, { command: "npm test", exitCode: 0 }],
+  });
+});
+
+test("execution marks a command still running when the turn ended", async () => {
+  const out = await replayResult([
+    runCommand("bg", "npm run dev", "in_progress"),
+    msgChunk("Started the dev server."),
+  ]);
+  assert.deepEqual(out.execution.commands, [{ command: "npm run dev", status: "in_progress" }]);
+});
+
+test("execution keeps the newest commands and counts the ones it dropped", async () => {
+  const updates = [];
+  for (let i = 0; i < MAX_REPORTED_COMMANDS + 5; i++) {
+    updates.push(runCommand(`c${i}`, `step ${i}`, "in_progress"), runCommand(`c${i}`, `step ${i}`, "completed", 0));
+  }
+  updates.push(runCommand("long", "x".repeat(400), "in_progress"), runCommand("long", "x".repeat(400), "completed", 0));
+  const out = await replayResult([...updates, msgChunk("done")]);
+  assert.equal(out.execution.toolCalls.execute, MAX_REPORTED_COMMANDS + 6);
+  assert.equal(out.execution.commands.length, MAX_REPORTED_COMMANDS);
+  assert.equal(out.execution.commandsOmitted, 6);
+  assert.equal(out.execution.commands[0].command, "step 6");
+  assert.equal(out.execution.commands.at(-1).command, "x".repeat(300) + "…");
+});
+
+test("execution is absent when the agent called no tools", async () => {
+  const out = await replayResult([msgChunk("Nothing to do.")]);
+  assert.equal("execution" in out, false);
+});
 
 test("runDelegate joins streamed fragments into complete-sentence progress", async () => {
   const progress = await collectProgress([
