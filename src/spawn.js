@@ -2,11 +2,13 @@ import process from "node:process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 
+// Splits on whitespace outside quotes. A quoted section joins the token it sits in, quotes removed,
+// as a shell reads --log-file="C:\a b\x.log". Backslashes are literal.
 export function splitArgs(raw) {
   const args = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  const re = /(?:"[^"]*"|'[^']*'|[^\s"']+)+/g;
   for (const m of String(raw || "").matchAll(re)) {
-    args.push(m[1] ?? m[2] ?? m[3]);
+    args.push(m[0].replace(/"([^"]*)"|'([^']*)'/g, (_, d, q) => d ?? q));
   }
   return args;
 }

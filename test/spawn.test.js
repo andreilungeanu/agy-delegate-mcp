@@ -22,6 +22,14 @@ test("splitArgs keeps single-quoted arguments intact", () => {
   assert.deepEqual(splitArgs("run 'a b c' end"), ["run", "a b c", "end"]);
 });
 
+// A quote inside a token split it: --log-file="C:\logs & traces\agy.log" became three args, and
+// the bare & among them reached cmd.exe as a command separator.
+test("splitArgs joins a quoted section to the token it sits in", () => {
+  assert.deepEqual(splitArgs('acp --log-file="C:\\logs & traces\\agy.log"'), ["acp", "--log-file=C:\\logs & traces\\agy.log"]);
+  assert.deepEqual(splitArgs(`a"b c"d 'e f'g`), ["ab cd", "e fg"]);
+  assert.deepEqual(splitArgs('acp "" end'), ["acp", "", "end"]);
+});
+
 test("splitArgs handles empty and undefined input", () => {
   assert.deepEqual(splitArgs(""), []);
   assert.deepEqual(splitArgs(undefined), []);
