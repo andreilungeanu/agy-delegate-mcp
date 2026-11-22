@@ -5,7 +5,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient, stampSettlement } from "../src/acp-client.js";
@@ -2069,4 +2069,33 @@ test("a resume keeps the model and effort set earlier in the session unless the 
   assert.deepEqual(switched.effectiveEffort, { thought_level: "high" });
   const afterSwitch = await run({});
   assert.equal(afterSwitch.effectiveModel, "claude-sonnet-5-5");
+});
+
+// promptInFlight went up before the attachments were read, so a frame arriving in that await was
+// folded into the result, even of a delegation cancelled there that never sent its prompt.
+test("frames that arrive while attachments are read are not part of the turn", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "agy-ctx-"));
+  const image = path.join(dir, "pic.png");
+  writeFileSync(image, Buffer.alloc(1024));
+  try {
+    const out = await runDelegate({
+      spec: "look", workspace: dir, contextFiles: ["pic.png"],
+      clientFactory: () => {
+        const client = stubClient("sess-ctx");
+        client.agentCapabilities = { promptCapabilities: { image: true } };
+        client.setMode = async () => {
+          // Lands during the attachment read that follows set_mode.
+          setImmediate(() => client.emit("update", { sessionId: "sess-ctx", update: msgChunk("setup chatter") }));
+        };
+        client.prompt = async () => {
+          client.emit("update", { sessionId: "sess-ctx", update: msgChunk("answer") });
+          return { stopReason: "end_turn" };
+        };
+        return client;
+      },
+    });
+    assert.equal(out.result, "answer");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

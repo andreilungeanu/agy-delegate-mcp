@@ -492,13 +492,14 @@ export async function runDelegate({
       state.reset();
       supervisor.promptStarted();
       startHeartbeat();
-      promptInFlight = true;
       try {
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
         // The caller gets the session id as the session opens, before the config calls above, so
         // a cancel can land before there is a turn to cancel. Honoured here, the prompt never goes
         // out; sent anyway, it ran in full under a "cancelled" reply.
         if (client.cancelRequested) return { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
+        // Raised with the prompt, so a frame that arrives while attachments are read is not folded in.
+        promptInFlight = true;
         const first = stampSettlement(client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]));
         // Opened only once the prompt is on the wire (request writes synchronously): a steer
         // accepted earlier went out first, and agy took the brief as a redirect of it.
