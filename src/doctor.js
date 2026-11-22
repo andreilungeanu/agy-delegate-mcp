@@ -91,6 +91,8 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     // A host interrupt ends the probe at once rather than at its timeout.
     // Returns once the probe has closed, so doctor does not leave it running; bounded like stop().
     onAbort = () => {
+      // The timeout would otherwise still fire during the kill and return first.
+      clearTimeout(timer);
       abortRequested = true;
       const killed = child.pid ? treeKill(child.pid).catch(() => {}) : Promise.resolve();
       const bound = new Promise((r) => setTimeout(r, PROBE_KILL_WAIT_MS).unref?.());

@@ -516,3 +516,47 @@ test("runDoctor probes through cmd.exe with a launcher path holding spaces", { s
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The abort left the probe's timeout armed, so a timeout falling while the kill ran returned
+// "timed out" with the probe still open. The probe's timer is captured and, after the abort, fired
+// if it is still armed, as a real one falling during the kill would be.
+test("an abort just before the probe's timeout reports the abort, after the probe has closed", async () => {
+  const pidFile = join(tmpdir(), `agy-probe-late-${process.pid}-${Date.now()}`);
+  const controller = new AbortController();
+  const saved = process.env.AGY_TEST_PIDFILE;
+  const realSet = globalThis.setTimeout;
+  const realClear = globalThis.clearTimeout;
+  let probeTimer;
+  let cleared = false;
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    const handle = realSet(fn, ms, ...rest);
+    if (ms === 8888) probeTimer = { handle, fn };
+    return handle;
+  };
+  globalThis.clearTimeout = (handle) => {
+    if (probeTimer && handle === probeTimer.handle) cleared = true;
+    return realClear(handle);
+  };
+  process.env.AGY_TEST_PIDFILE = pidFile;
+  try {
+    const run = rawRunDoctor({
+      signal: controller.signal, versionTimeoutMs: 8888,
+      spawnSpec: { command: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)), args: [], options: { shell: false } },
+    });
+    const deadline = Date.now() + 5000;
+    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => realSet(r, 20));
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    controller.abort();
+    if (!cleared) { realClear(probeTimer.handle); probeTimer.fn(); }
+    const out = await run;
+    assert.equal(out.agent.error, "version probe aborted by MCP host");
+    let alive = true;
+    try { process.kill(pid, 0); } catch { alive = false; }
+    assert.equal(alive, false, "the probe must be gone when doctor returns");
+  } finally {
+    globalThis.setTimeout = realSet;
+    globalThis.clearTimeout = realClear;
+    if (saved === undefined) delete process.env.AGY_TEST_PIDFILE; else process.env.AGY_TEST_PIDFILE = saved;
+    rmSync(pidFile, { force: true });
+  }
+});
