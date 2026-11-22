@@ -48,7 +48,7 @@ before the tool runs.
 | `env.ACP_LOG_SIZE` | Flight recorder size (default `2000`). |
 | `env.ACP_AGENT_COMMAND` / `env.ACP_AGENT_ARGS` | Launcher overrides, or `null` when unset. |
 | `env.AGY_DELEGATE_TRANSCRIPT` | Transcript frame count, or `null` when unset. |
-| `env.AGY_DELEGATE_HANDSHAKE_MS` / `HARD_CAP_MS` / `IDLE_MS` | Timeout knobs, or `null` when unset. |
+| `env.AGY_DELEGATE_HANDSHAKE_MS` / `HARD_CAP_MS` / `IDLE_MS` / `BACKGROUND_WAIT_MS` | Timeout knobs, or `null` when unset. |
 
 Optional `deep: true` runs a bounded ACP handshake (15 s) and adds `agent.handshake`:
 `{ ok: false, error }` on failure — not signed in, or a timeout — or `{ ok: true,
