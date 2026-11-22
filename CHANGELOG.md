@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-22
+
+### Changed
+
+- A resume that leaves out `model` or `effort` uses what this server last set on that session; agy
+  reopens a resumed session at its defaults.
+- `cancel` and `steer` reject a blank `sessionId`. `resumeSessionId` is trimmed, and a blank one
+  means no resume.
+
+### Fixed
+
+- A cancel during session setup sends no prompt and returns `stopReason: "cancelled"` at once, even
+  if a config call hangs or fails. The prompt still ran in full.
+- `steer` reports `not-running` once the turn has ended, been cancelled or lost its agent; it said
+  `not-ready`. A steer agy accepted that then fails fails the delegation, and a steer queued behind a
+  failed one supplies the result.
+- `cancel` after the turn ended reports `not-running` and leaves the result alone; `force` cuts
+  agy's close short as each turn settles.
+- A host abort during agy's close, or during `doctor`'s probe, handshake or close, ends it at once.
+  Shutdown stops `doctor`'s agent.
+- The background wait runs only after `end_turn`, on one clock per delegation. A refusal or output
+  cap that leaves a command open names the command, not a question.
+- `usage` keeps a cached or thought count one reply left out. `context` ignores other sessions'
+  frames, and frames sent while attachments are read stay out of the result.
+- A delegation returns only once agy's descendants are killed. An exit the bridge does not see is
+  retried and reported in `protocolWarnings`.
+- No DEP0190 warning under Node 24 on Windows.
+- On Linux and macOS, SIGHUP stops the agents, and only a second signal cuts shutdown short, killing
+  their process groups first.
+
 ## [1.4.0] - 2026-11-22
 
 ### Added
