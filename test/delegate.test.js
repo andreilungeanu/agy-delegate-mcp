@@ -1791,3 +1791,33 @@ test("a steer during the background wait ends the wait and returns the steered r
   assert.equal(out.result, "steered: stop the server");
   assert.equal(out.resultSource, undefined);
 });
+
+// An image attachment is read after setup, so a steer that could land then went out as agy's
+// first prompt, and the brief followed as a redirect of it.
+test("a steer cannot reach agy before the task prompt", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "agy-steer-order-"));
+  const image = path.join(dir, "shot.png");
+  writeFileSync(image, Buffer.alloc(1024, 1)); // small enough for a 2 KB transcript frame; still read asynchronously
+  let client;
+  let polling = true;
+  const prev = process.env.AGY_DELEGATE_TRANSCRIPT;
+  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
+  try {
+    await runDelegate({
+      spec: "STEERABLE task", workspace: dir, contextFiles: [image],
+      clientFactory: () => (client = fakeFactory()),
+      onSessionReady: (sid) => {
+        const poll = () => { if (polling && !client.steer(sid, "go left")) setImmediate(poll); };
+        poll();
+      },
+    });
+  } finally {
+    polling = false;
+    if (prev === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
+    else process.env.AGY_DELEGATE_TRANSCRIPT = prev;
+  }
+  const prompts = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line))
+    .filter((f) => f.method === "session/prompt");
+  assert.equal(prompts[0].params.prompt[0].text, "STEERABLE task", "the brief must be the first prompt agy sees");
+  assert.equal(prompts.length, 2);
+});

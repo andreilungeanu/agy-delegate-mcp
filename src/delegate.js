@@ -472,10 +472,13 @@ export async function runDelegate({
       supervisor.promptStarted();
       startHeartbeat();
       promptInFlight = true;
-      client.acceptSteers?.(true);
       try {
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
-        let turn = await client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
+        const first = client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]);
+        // Opened only once the prompt is on the wire (request writes synchronously): a steer
+        // accepted earlier went out first, and agy took the brief as a redirect of it.
+        client.acceptSteers?.(true);
+        let turn = await first;
         const replies = [turn];
         // A steer settles the prompt before it at once with end_turn, so the turn ends only when
         // the newest steer's reply does. Each pass re-checks for a background command, which a
