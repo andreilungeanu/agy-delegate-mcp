@@ -1,6 +1,8 @@
 // Everything describing the turn in progress, reset as one before the prompt. freshFields() is the
 // single declaration reset() applies, so a field added there is reset too.
 
+const RECOMMENDED = /^\(Recommended\)\s*/;
+
 const isTerminalToolStatus = (status) =>
   status === "completed" || status === "failed" || status === "cancelled";
 
@@ -72,6 +74,8 @@ function freshFields() {
     // One record per tool call id, in first-seen order, for the execution summary: agy re-sends
     // finished calls, so its frames merge rather than add.
     toolCallRecords: new Map(),
+    // The questions of each ask_question call, normalized, by call id.
+    questions: new Map(),
     lastToolLabel: null,
     sessionTitle: undefined,
   };
@@ -149,7 +153,35 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
     // Unfinished calls that end on their own: a backgrounded command or a scheduled wake-up. An
     // ask_question waits on the caller instead, so it is never waited for.
     backgroundToolCalls() {
-      return [...state.activeToolCalls].filter((id) => !/ask_question/.test(state.toolNames.get(id) ?? ""));
+      return [...state.activeToolCalls].filter((id) => !state.isQuestion(id));
+    },
+
+    isQuestion(id) {
+      return /ask_question/.test(state.toolNames.get(id) ?? "");
+    },
+
+    // agy sends rawInput.questions as [{question, options[], is_multi_select}], marking one option
+    // "(Recommended) ". Entries without a question string are dropped; false when none is left.
+    recordQuestions(id, raw) {
+      if (id == null || !Array.isArray(raw)) return false;
+      const questions = raw.filter((q) => q && typeof q.question === "string" && q.question).map((q) => {
+        const options = (Array.isArray(q.options) ? q.options : []).filter((o) => typeof o === "string");
+        const marked = options.find((o) => RECOMMENDED.test(o));
+        return {
+          question: q.question,
+          options: options.map((o) => o.replace(RECOMMENDED, "")),
+          ...(q.is_multi_select === true ? { multiSelect: true } : {}),
+          ...(marked !== undefined ? { recommended: marked.replace(RECOMMENDED, "") } : {}),
+        };
+      });
+      if (!questions.length) return false;
+      state.questions.set(id, questions);
+      return true;
+    },
+
+    // Questions of the ask_question calls still open, in the order agy asked them.
+    openQuestions() {
+      return [...state.activeToolCalls].filter((id) => state.isQuestion(id)).flatMap((id) => state.questions.get(id) ?? []);
     },
 
     // True while a message chunk still belongs in the result: before any tool ran, or after

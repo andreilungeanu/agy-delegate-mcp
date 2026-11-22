@@ -240,7 +240,7 @@ test("server advertises instructions, output schemas, and conservative tool anno
     assert.match(tools.delegate.description, /every permission the agent requests, in any mode and anywhere on disk/i);
     // The bridge implements no elicitation path, so the description must teach
     // prose-question → resume.
-    assert.match(tools.delegate.description, /Clarifying questions arrive as prose.*resumeSessionId/i);
+    assert.match(tools.delegate.description, /clarifying questions arrive in questions.*resumeSessionId/i);
     assert.ok(!/uses MCP elicitation/i.test(tools.delegate.description));
     assert.match(tools.delegate.description, /Leave model and effort unset unless the user explicitly asks/);
     assert.equal(delegateInputSchema.parse({ spec: "x", workspace: "." }).model, undefined);

@@ -422,6 +422,7 @@ export async function runDelegate({
       state.recordToolCall(up, isArtifact);
       if (up.sessionUpdate === "tool_call") {
         state.startTool(up.toolCallId, up.status, up.name ?? up.title);
+        if (state.isQuestion(up.toolCallId)) state.recordQuestions(up.toolCallId, (up.rawInput ?? up.args)?.questions);
         const label = String(up.title || up.kind || "tool");
         const path = up.locations?.[0]?.path;
         // One line, for the progress note and the stall error (a command title keeps its newlines).
@@ -593,6 +594,9 @@ export async function runDelegate({
       ? (state.sawToolCall ? "post-tool" : "tool-free-stream")
       : "none";
     const protocolWarnings = [];
+    // An open ask_question whose questions were read is reported in questions, not as a warning.
+    const questions = state.openQuestions();
+    const askedOnly = questions.length > 0 && state.backgroundToolCalls().length === 0;
     if (!finalMessageAvailable && state.activeToolCalls.size > 0) {
       // Measured cases (agy 1.5.14): a background command still running when the wait ran out, or an
       // ask_question waiting on the caller.
@@ -608,11 +612,13 @@ export async function runDelegate({
           ? ` agy moved it to the background, and it was still running after the bridge waited ${fmtDuration(backgroundWaited)}`
             + " (AGY_DELEGATE_BACKGROUND_WAIT_MS); it stops when the bridge stops agy."
           : ` agy ended the turn (${res?.stopReason}) with it still running; it stops when the bridge stops agy.`;
-      protocolWarnings.push(
-        `the turn ended with a tool call still running (${openLabel ?? "unnamed tool"}).`
-        + cause
-        + (result ? " result is agy's message from while it ran." : " agy sent no message while it ran.")
-      );
+      if (!askedOnly) {
+        protocolWarnings.push(
+          `the turn ended with a tool call still running (${openLabel ?? "unnamed tool"}).`
+          + cause
+          + (result ? " result is agy's message from while it ran." : " agy sent no message while it ran.")
+        );
+      }
     } else if (!finalMessageAvailable && state.discardedResult) {
       result = state.discardedResult;
       resultSource = "pre-tool-fallback";
@@ -639,6 +645,7 @@ export async function runDelegate({
     // Absent means nothing reported, not nothing changed: shell edits emit no diff.
     const filesReported = normalizeAgentReportedFiles([...state.touched], workspace);
     if (filesReported.length) out.filesReportedByEditTools = filesReported;
+    if (questions.length) out.questions = questions;
     const execution = executionSummary(state.toolCallRecords);
     if (execution) out.execution = execution;
     // resultSource appears only as a caveat; resumed only when a resume took.

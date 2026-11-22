@@ -476,6 +476,58 @@ test("execution is absent when the agent called no tools", async () => {
   assert.equal("execution" in out, false);
 });
 
+// agy 1.5.14's ask_question as captured with probes/ask-question.mjs: it streams the question as
+// prose, leaves the call pending and ends the turn.
+const AGY_QUESTIONS = [
+  { is_multi_select: false, options: ["(Recommended) Rename x in a.js", "Rename x in b.js", "Rename x in both a.js and b.js"], question: "Which file's variable `x` would you like to rename?" },
+  { is_multi_select: false, options: ["(Recommended) count", "value", "num", "item"], question: "What new name should be used for the variable?" },
+];
+const askQuestion = (id, questions = AGY_QUESTIONS) => [
+  { sessionUpdate: "tool_call", toolCallId: id, name: "ask_question", kind: "other", status: "in_progress", title: "Run ask_question", rawInput: { questions }, args: { questions } },
+  { sessionUpdate: "tool_call_update", toolCallId: id, name: "ask_question", kind: "other", status: "pending", title: "Run ask_question", rawInput: { questions } },
+];
+
+test("questions carries agy's open ask_question, with the recommended option named", async () => {
+  const out = await replayResult([...askQuestion("ask1"), msgChunk("Which variable would you like to rename?")]);
+  assert.deepEqual(out.questions, [
+    { question: "Which file's variable `x` would you like to rename?", options: ["Rename x in a.js", "Rename x in b.js", "Rename x in both a.js and b.js"], recommended: "Rename x in a.js" },
+    { question: "What new name should be used for the variable?", options: ["count", "value", "num", "item"], recommended: "count" },
+  ]);
+  assert.equal(out.result, "Which variable would you like to rename?");
+  assert.equal(out.resultSource, "unfinished-tool");
+  assert.equal(out.protocolWarnings, undefined, "questions carries the question; no warning repeats it");
+});
+
+test("questions marks a multi-select question and omits recommended when agy marked none", async () => {
+  const out = await replayResult(askQuestion("ask1", [{ is_multi_select: true, options: ["lint", "test"], question: "Which checks?" }]));
+  assert.deepEqual(out.questions, [{ question: "Which checks?", options: ["lint", "test"], multiSelect: true }]);
+});
+
+test("questions is absent when agy's question was answered within the turn", async () => {
+  const out = await replayResult([
+    ...askQuestion("ask1"),
+    { sessionUpdate: "tool_call_update", toolCallId: "ask1", name: "ask_question", status: "completed" },
+    msgChunk("Renamed."),
+  ]);
+  assert.equal("questions" in out, false);
+});
+
+test("an ask_question whose questions cannot be read keeps the warning instead", async () => {
+  const out = await replayResult(askQuestion("ask1", "not a list"));
+  assert.equal("questions" in out, false);
+  assert.match(out.protocolWarnings.join(" "), /agy is asking a question/);
+});
+
+test("questions is reported alongside the warning for a background command still running", async () => {
+  const out = await replayResult([
+    runCommand("bg", "npm run dev", "in_progress"),
+    ...askQuestion("ask1"),
+    msgChunk("Which variable?"),
+  ]);
+  assert.equal(out.questions.length, 2);
+  assert.match(out.protocolWarnings.join(" "), /npm run dev/);
+});
+
 test("runDelegate joins streamed fragments into complete-sentence progress", async () => {
   const progress = await collectProgress([
     thoughtChunk("checking the call si"),

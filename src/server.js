@@ -82,6 +82,12 @@ export const delegateOutputShape = {
   context: z.object({ used: z.number(), size: z.number() }).strict().optional(),
   sessionId: z.string(),
   filesReportedByEditTools: z.array(z.string()).optional(),
+  questions: z.array(z.object({
+    question: z.string(),
+    options: z.array(z.string()),
+    multiSelect: z.boolean().optional(),
+    recommended: z.string().optional(),
+  }).strict()).optional(),
   execution: z.object({
     toolCalls: z.record(z.string(), z.number()),
     commands: z.array(z.object({
@@ -279,7 +285,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
     "delegate",
     {
       description:
-        "Delegate a coding task to Antigravity's agy over ACP. Never shell out to agy — use this tool only. Auto-approves every permission the agent requests, in any mode and anywhere on disk. Clarifying questions arrive as prose in result — resume with resumeSessionId to answer. Leave model and effort unset unless the user explicitly asks. See the delegate skill.",
+        "Delegate a coding task to Antigravity's agy over ACP. Never shell out to agy — use this tool only. Auto-approves every permission the agent requests, in any mode and anywhere on disk. agy's clarifying questions arrive in questions — resume with resumeSessionId and the answers in spec. Leave model and effort unset unless the user explicitly asks. See the delegate skill.",
       inputSchema: delegateInputSchema,
       annotations: {
         title: "Delegate coding task to Antigravity",
