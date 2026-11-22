@@ -503,11 +503,13 @@ test("spawning through a shell raises no DEP0190 warning", () => {
 
 // treeKill walks the tree with ps before it signals anything. An agent that exited by itself during
 // that walk resolved stop() at once, and its session's commands were signalled only afterwards: a
-// shutdown exiting on stop() left them running. A ps that answers late makes the window reliable.
+// shutdown exiting on stop() left them running. The ps shim takes its snapshot, ends the agent, then
+// answers late: the agent exits by itself during the walk, whatever the machine's speed.
 test("stop() resolves only after the commands agy left in their own session are killed", { skip: process.platform === "win32" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "agy-ps-shim-"));
   const pidFile = join(dir, "grandchild.pid");
-  writeFileSync(join(dir, "ps"), '#!/bin/sh\nout=$(/bin/ps "$@")\nsleep 1\nprintf "%s\n" "$out"\n');
+  const agentPidFile = join(dir, "agent.pid");
+  writeFileSync(join(dir, "ps"), `#!/bin/sh\nout=$(/bin/ps "$@")\nkill -TERM "$(cat '${agentPidFile}')"\nsleep 1\nprintf '%s\\n' "$out"\n`);
   chmodSync(join(dir, "ps"), 0o755);
   const savedPath = process.env.PATH;
   process.env.PATH = `${dir}:${savedPath}`;
@@ -516,13 +518,14 @@ test("stop() resolves only after the commands agy left in their own session are 
     const client = new AcpClient({
       spawnSpec: {
         command: process.execPath,
-        args: [fileURLToPath(new URL("./fixtures/exits-leaving-session-child.js", import.meta.url)), pidFile, "300"],
+        args: [fileURLToPath(new URL("./fixtures/exits-leaving-session-child.js", import.meta.url)), pidFile],
         options: { shell: false },
       },
     });
     await client.start();
     await until(() => { try { return readFileSync(pidFile, "utf8").endsWith("\n"); } catch { return false; } }, 5000, "fixture never wrote its child's pid");
     grandchild = Number(readFileSync(pidFile, "utf8").trim());
+    writeFileSync(agentPidFile, String(client.child.pid));
     await client.stop();
     assert.ok(!pidAlive(grandchild), "the session's command must be killed when stop() resolves");
   } finally {

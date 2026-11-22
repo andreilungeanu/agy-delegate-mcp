@@ -805,7 +805,7 @@ test("installSignalCleanup waits for the kill to settle before exiting", async (
   }
 });
 
-test("a signal during the wait after stdin closed exits at once", { skip: process.platform === "win32" }, async () => {
+test("a second signal during the wait after stdin closed exits at once", { skip: process.platform === "win32" }, async () => {
   const exited = [];
   const map = new Map([["sess-1", new Set([{ client: { stop: () => new Promise(() => {}) } }])]]);
   const stdin = new EventEmitter();
@@ -817,7 +817,9 @@ test("a signal during the wait after stdin closed exits at once", { skip: proces
     await new Promise((r) => setImmediate(r));
     assert.deepEqual(exited, [], "first trigger waits for the kill");
     process.emit("SIGINT");
-    assert.deepEqual(exited, [130], "a signal skips the wait");
+    assert.deepEqual(exited, [], "one signal after the EOF still waits");
+    process.emit("SIGTERM");
+    assert.deepEqual(exited, [143], "a second signal skips the wait");
   } finally {
     for (const signal of signals) {
       for (const listener of process.listeners(signal)) {
