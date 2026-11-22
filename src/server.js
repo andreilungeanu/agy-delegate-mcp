@@ -449,10 +449,11 @@ export function installSignalCleanup(map, {
   stdin = process.stdin,
 } = {}) {
   let shuttingDown = false;
-  const shutdown = (code) => {
-    // A second trigger skips the wait below: the kills are already dispatched, and a caller
-    // that has asked twice wants out now.
-    if (shuttingDown) return exit(code);
+  const shutdown = (code, fromSignal = false) => {
+    // A second signal skips the wait below: the kills are already dispatched, and a caller that
+    // has asked twice wants out now. A stdin EOF is not a second ask: a hangup closes stdin
+    // right after its SIGHUP.
+    if (shuttingDown) return fromSignal ? exit(code) : undefined;
     shuttingDown = true;
     // Set in the handler, not left to the exit below: a loop that runs dry on its own still
     // has to die with the code the signal asked for, and the scheduled exit may never get a
@@ -479,8 +480,9 @@ export function installSignalCleanup(map, {
   // longer reaches it. Installing a handler replaces Node's default; swallowing Ctrl-C would
   // leak the agent. shutdown() already walks pending, so this covers spawn through session/new.
   if (DETACHED) {
-    const signals = /** @type {[NodeJS.Signals, number][]} */ ([["SIGINT", 130], ["SIGTERM", 143]]);
-    for (const [signal, code] of signals) process.on(signal, () => shutdown(code));
+    // SIGHUP is a closed terminal; its default would end the server without stopping the agents.
+    const signals = /** @type {[NodeJS.Signals, number][]} */ ([["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]);
+    for (const [signal, code] of signals) process.on(signal, () => shutdown(code, true));
   }
   // Closing the server's stdin is how a stdio host shuts the transport down, and it is what a
   // host reaches for before it resorts to a signal. The SDK transport does not listen for it —

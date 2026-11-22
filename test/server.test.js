@@ -803,20 +803,21 @@ test("installSignalCleanup waits for the kill to settle before exiting", async (
   }
 });
 
-test("a second trigger during the wait exits at once", async () => {
+test("a signal during the wait after stdin closed exits at once", { skip: process.platform === "win32" }, async () => {
   const exited = [];
   const map = new Map([["sess-1", new Set([{ client: { stop: () => new Promise(() => {}) } }])]]);
   const stdin = new EventEmitter();
-  const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
   try {
-    installSignalCleanup(map, { exit: (code) => exited.push(code), stdin });
+    installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin });
     stdin.emit("end");
     await new Promise((r) => setImmediate(r));
     assert.deepEqual(exited, [], "first trigger waits for the kill");
-    stdin.emit("end");
-    assert.deepEqual(exited, [0], "second trigger skips the wait");
+    process.emit("SIGINT");
+    assert.deepEqual(exited, [130], "a signal skips the wait");
   } finally {
-    for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const signal of signals) {
       for (const listener of process.listeners(signal)) {
         if (!before[signal].includes(listener)) process.removeListener(signal, listener);
       }
@@ -1160,5 +1161,53 @@ test("the doctor tool registers its agent where shutdown looks, and passes the h
     assert.equal(pending.size, 0, "the handle leaves once doctor returns");
   } finally {
     await client.close();
+  }
+});
+
+// A closed terminal sends SIGHUP, whose default ends the server without stopping its detached
+// agents. The stdin EOF that follows the hangup then read as a second request and exited before
+// the kills settled; only a second signal is that.
+test("SIGHUP stops registered agents, and the stdin EOF after it does not cut the wait short", { skip: process.platform === "win32" }, async () => {
+  const exited = [];
+  let settle;
+  const stopped = new Promise((r) => { settle = r; });
+  const map = new Map([["sess-1", new Set([{ client: { stop: () => stopped } }])]]);
+  const stdin = new EventEmitter();
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin });
+    process.emit("SIGHUP");
+    stdin.emit("end");
+    await flushExit();
+    assert.deepEqual(exited, [], "exit must wait for the kill");
+    settle(true);
+    await flushExit();
+    assert.deepEqual(exited, [129]);
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
+  }
+});
+
+test("a second signal during shutdown exits at once", { skip: process.platform === "win32" }, async () => {
+  const exited = [];
+  const map = new Map([["sess-1", new Set([{ client: { stop: () => new Promise(() => {}) } }])]]);
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
+  try {
+    installSignalCleanup(map, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin: new EventEmitter() });
+    process.emit("SIGTERM");
+    process.emit("SIGINT");
+    assert.deepEqual(exited, [130]);
+  } finally {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!before[signal].includes(listener)) process.removeListener(signal, listener);
+      }
+    }
   }
 });
