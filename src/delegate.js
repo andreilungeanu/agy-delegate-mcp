@@ -383,6 +383,7 @@ export async function runDelegate({
         const slashed = (s) => String(s).replace(/\\/g, "/");
         const named = path && slashed(label).includes(slashed(path));
         state.lastToolLabel = (label + (path && !named ? " — " + path : "")).replace(/\s+/g, " ").trim();
+        if (up.toolCallId != null) state.toolLabels.set(up.toolCallId, state.lastToolLabel);
         try { onProgress?.(("running: " + state.lastToolLabel).slice(0, 200)); } catch {}
       } else {
         state.updateToolStatus(up.toolCallId, up.status);
@@ -401,6 +402,8 @@ export async function runDelegate({
   // finishes the command and continues the turn unprompted, closing with a usage_update (measured,
   // agy 1.5.14). Stopping agy at end_turn would kill the command. The hard cap still bounds the wait.
   let backgroundWaited;
+  // Set only when the wait ran its full length, which is what the warning blames.
+  let backgroundWaitRanOut = false;
   // One clock per delegation, kept across steered turns.
   let backgroundStartedAt;
   const waitForBackground = async () => {
@@ -409,7 +412,7 @@ export async function runDelegate({
     for (;;) {
       await new Promise((r) => setTimeout(r, Math.min(250, backgroundSettleMs)));
       backgroundWaited = Date.now() - startedAt;
-      if (backgroundWaited >= backgroundWaitMs) return;
+      if (backgroundWaited >= backgroundWaitMs) { backgroundWaitRanOut = true; return; }
       // The delegation already failed (agent exit, abort, hard cap): nobody reads this wait.
       if (supervisor.settled) return;
       if (client.cancelRequested) return "cancelled";
@@ -541,15 +544,18 @@ export async function runDelegate({
       // ask_question waiting on the caller.
       result = state.unfinishedToolText;
       resultSource = result ? "unfinished-tool" : "none";
+      // The open command if there is one, else the question; not the newest tool.
+      const openId = state.backgroundToolCalls()[0] ?? [...state.activeToolCalls][0];
+      const openLabel = state.toolLabels.get(openId) ?? state.lastToolLabel;
       // A refusal or output cap is not waited on, so a command can be open with no wait.
       const cause = !state.backgroundToolCalls().length
         ? " agy is asking a question (ask_question), which a resume answers."
-        : backgroundWaited !== undefined
+        : backgroundWaitRanOut
           ? ` agy moved it to the background, and it was still running after the bridge waited ${fmtDuration(backgroundWaited)}`
             + " (AGY_DELEGATE_BACKGROUND_WAIT_MS); it stops when the bridge stops agy."
           : ` agy ended the turn (${res?.stopReason}) with it still running; it stops when the bridge stops agy.`;
       protocolWarnings.push(
-        `the turn ended with a tool call still running (${state.lastToolLabel ?? "unnamed tool"}).`
+        `the turn ended with a tool call still running (${openLabel ?? "unnamed tool"}).`
         + cause
         + (result ? " result is agy's message from while it ran." : " agy sent no message while it ran.")
       );

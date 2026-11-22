@@ -2203,3 +2203,44 @@ test("a resume with no remembered model and none given warns that agy's default 
   assert.equal(carried.effectiveModel, "gemini-3.8-flash");
   assert.ok(!(carried.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)));
 });
+
+// The cause said the wait had run out whenever any wait had started, so a cancel during the wait
+// blamed AGY_DELEGATE_BACKGROUND_WAIT_MS.
+test("a cancel during the background wait does not blame the wait's limit", async () => {
+  let client;
+  const out = await runDelegate({
+    spec: "run it", workspace: process.cwd(),
+    clientFactory: () => {
+      client = stubClient("sess-bgc");
+      client.prompt = async () => {
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", title: "npm test", status: "in_progress" } });
+        return { stopReason: "end_turn" };
+      };
+      return client;
+    },
+    onSessionReady: () => { setTimeout(() => { client.cancelRequested = true; }, 400); },
+    backgroundWaitMs: 5000, backgroundSettleMs: 20, backgroundContinueMs: 5000,
+  });
+  assert.equal(out.stopReason, "cancelled");
+  const warning = (out.protocolWarnings ?? []).find((w) => /tool call still running/.test(w)) ?? "";
+  assert.doesNotMatch(warning, /AGY_DELEGATE_BACKGROUND_WAIT_MS/);
+});
+
+// The label was the newest tool's, so a command left open beside a later ask_question was named
+// as the question.
+test("the unfinished-tool warning names the open command, not a later question", async () => {
+  const out = await runDelegate({
+    spec: "run it", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient("sess-two");
+      client.prompt = async () => {
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", title: "npm test", status: "in_progress" } });
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c2", name: "ask_question", title: "Ask a question", status: "pending" } });
+        return { stopReason: "refusal" };
+      };
+      return client;
+    },
+  });
+  const warning = (out.protocolWarnings ?? []).find((w) => /tool call still running/.test(w)) ?? "";
+  assert.match(warning, /npm test/);
+});
