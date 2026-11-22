@@ -35,7 +35,8 @@ export function resolveAcpSpawn() {
 // line is built here the same way and passed alone: cmd.exe receives the same bytes.
 /** @returns {[string, string[]]} */
 export function spawnCommandLine(command, args, options) {
-  return options?.shell ? [[command, ...args].join(" "), []] : [command, args];
+  const argv = args ?? [];
+  return options?.shell ? [[command, ...argv].join(" "), []] : [command, argv];
 }
 
 // Through a shell the spawn itself always succeeds: cmd.exe starts, fails to find the launcher and

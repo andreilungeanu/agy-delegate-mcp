@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { splitArgs, resolveAcpSpawn, commandExists } from "../src/spawn.js";
+import { splitArgs, resolveAcpSpawn, commandExists, spawnCommandLine } from "../src/spawn.js";
 
 test("splitArgs splits plain whitespace-separated tokens", () => {
   assert.deepEqual(splitArgs("acp --verbose"), ["acp", "--verbose"]);
@@ -69,4 +69,10 @@ test("commandExists finds a launcher on PATH with and without a PATHEXT extensio
   assert.equal(commandExists(`"${path.join(dir, "fakeagy.cmd")}"`, env), true, "quotes are stripped");
   assert.equal(commandExists(path.join(dir, "missingagy"), env), false);
   assert.equal(commandExists("", env), false);
+});
+
+// spawn accepts a missing args array; the shell command line built for DEP0190 has to as well.
+test("spawnCommandLine accepts a spec without args", () => {
+  assert.deepEqual(spawnCommandLine("agy", undefined, { shell: true }), ["agy", []]);
+  assert.deepEqual(spawnCommandLine("agy", undefined, { shell: false }), ["agy", []]);
 });
