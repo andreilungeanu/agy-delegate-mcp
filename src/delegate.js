@@ -407,17 +407,19 @@ export async function runDelegate({
   // One clock per delegation, kept across steered turns.
   let backgroundStartedAt;
   const waitForBackground = async () => {
-    try { onProgress?.(`waiting for agy's background command: ${state.lastToolLabel ?? "tool"}`.slice(0, 200)); } catch {}
+    const label = state.toolLabels.get(state.backgroundToolCalls()[0]) ?? state.lastToolLabel ?? "tool";
+    try { onProgress?.(`waiting for agy's background command: ${label}`.slice(0, 200)); } catch {}
     const startedAt = (backgroundStartedAt ??= Date.now());
     for (;;) {
       await new Promise((r) => setTimeout(r, Math.min(250, backgroundSettleMs)));
       backgroundWaited = Date.now() - startedAt;
-      if (backgroundWaited >= backgroundWaitMs) { backgroundWaitRanOut = true; return; }
       // The delegation already failed (agent exit, abort, hard cap): nobody reads this wait.
       if (supervisor.settled) return;
+      // Ahead of the deadline, so a cancel or steer in the last tick is not lost to it.
       if (client.cancelRequested) return "cancelled";
       // A steer redirects the turn; its own prompt reply is what ends it now.
       if (client.hasSteer?.()) return;
+      if (backgroundWaited >= backgroundWaitMs) { backgroundWaitRanOut = true; return; }
       if (state.backgroundToolCalls().length) continue;
       const quietMs = Date.now() - state.lastFrameAt;
       if (state.usageAfterActivity && quietMs >= backgroundSettleMs) return;

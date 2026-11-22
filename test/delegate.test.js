@@ -2279,3 +2279,47 @@ test("a same-process resume of a session run on agy's defaults gives no restart 
   assert.equal(out.resumed, true);
   assert.ok(!(out.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)), JSON.stringify(out.protocolWarnings));
 });
+
+// The deadline was checked before the cancel, so a cancel that landed in the wait's last tick was
+// dropped: the delegation reported end_turn and blamed AGY_DELEGATE_BACKGROUND_WAIT_MS.
+test("a cancel that lands as the background wait runs out still cancels", async () => {
+  let client;
+  const out = await runDelegate({
+    spec: "run it", workspace: process.cwd(),
+    clientFactory: () => {
+      client = stubClient("sess-bglast");
+      client.prompt = async () => {
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", title: "npm test", status: "in_progress" } });
+        client.cancelRequested = true;
+        return { stopReason: "end_turn" };
+      };
+      return client;
+    },
+    backgroundWaitMs: 1, backgroundSettleMs: 20, backgroundContinueMs: 5000,
+  });
+  assert.equal(out.stopReason, "cancelled");
+  const warning = (out.protocolWarnings ?? []).find((w) => /tool call still running/.test(w)) ?? "";
+  assert.doesNotMatch(warning, /AGY_DELEGATE_BACKGROUND_WAIT_MS/);
+});
+
+// The progress line named the newest tool, not the command the wait is for.
+test("the background wait's progress line names the backgrounded command", async () => {
+  const notes = [];
+  await runDelegate({
+    spec: "run it", workspace: process.cwd(),
+    onProgress: (m) => notes.push(m),
+    clientFactory: () => {
+      const client = stubClient("sess-bglabel");
+      client.prompt = async () => {
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", title: "npm test", status: "in_progress" } });
+        client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c2", name: "view_file", title: "README.md", status: "in_progress" } });
+        client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "c2", status: "completed" } });
+        return { stopReason: "end_turn" };
+      };
+      return client;
+    },
+    backgroundWaitMs: 50, backgroundSettleMs: 20, backgroundContinueMs: 5000,
+  });
+  const line = notes.find((m) => /waiting for agy's background command/.test(m)) ?? "";
+  assert.match(line, /npm test/);
+});
