@@ -545,7 +545,7 @@ test("start() passes a launcher path and arguments with spaces through cmd.exe i
     writeFileSync(join(dir, "argv-dump.js"), "process.stderr.write(JSON.stringify(process.argv.slice(2))); process.exit(3);\n");
     const launcher = join(dir, "launch me.cmd");
     writeFileSync(launcher, `@echo off\r\n"${process.execPath}" "%~dp0argv-dump.js" %*\r\n`);
-    const args = ["two words", "C:\trailing dir\\", "a&b", "", "acp"];
+    const args = ["two words", "C:\\trailing dir\\", "a&b", "", "acp"];
     // Unquoted as most users write it, and pre-quoted as a path with a space had to be written.
     for (const command of [launcher, `"${launcher}"`]) {
       const client = new AcpClient({ spawnSpec: { command, args, options: { shell: true } } });
