@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import { runDoctor as rawRunDoctor } from "../src/doctor.js";
 import { AcpClient } from "../src/acp-client.js";
@@ -460,4 +463,42 @@ test("runDoctor cuts a wedged graceful close short when the host aborts during i
     },
   });
   assert.ok(Date.now() - abortedAt < 1500, `doctor's close ran ${Date.now() - abortedAt} ms after the abort`);
+});
+
+// An abort that had already fired still spawned the probe, and the abort's result won the race
+// with the spawn error: a missing launcher read as found.
+test("an already-aborted doctor spawns no probe and does not report a missing launcher as found", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const out = await rawRunDoctor({
+    signal: controller.signal,
+    spawnSpec: { command: join(tmpdir(), "no-such-dir-xyz", "agent-xyz"), args: [], options: { shell: false } },
+  });
+  assert.equal(out.agent.found, false);
+  assert.match(out.agent.error ?? "", /aborted/);
+});
+
+// The probe was killed fire-and-forget, so doctor could return with --version still running.
+test("an abort during the version probe returns once the probe process is gone", async () => {
+  const pidFile = join(tmpdir(), `agy-probe-${process.pid}-${Date.now()}`);
+  const controller = new AbortController();
+  const saved = process.env.AGY_TEST_PIDFILE;
+  process.env.AGY_TEST_PIDFILE = pidFile;
+  try {
+    const run = rawRunDoctor({
+      signal: controller.signal, versionTimeoutMs: 10000,
+      spawnSpec: { command: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)), args: [], options: { shell: false } },
+    });
+    const deadline = Date.now() + 5000;
+    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    controller.abort();
+    await run;
+    let alive = true;
+    try { process.kill(pid, 0); } catch { alive = false; }
+    assert.equal(alive, false, "the probe process must be gone when doctor returns");
+  } finally {
+    if (saved === undefined) delete process.env.AGY_TEST_PIDFILE; else process.env.AGY_TEST_PIDFILE = saved;
+    rmSync(pidFile, { force: true });
+  }
 });

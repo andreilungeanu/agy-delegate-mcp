@@ -1,5 +1,6 @@
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
 import { commandExists, resolveAcpSpawn, spawnArgv, spawnCommandLine } from "./spawn.js";
 import { DETACHED, treeKill } from "./proc.js";
@@ -9,6 +10,7 @@ import { allowedValues, describeOptions } from "./model-options.js";
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const PROBE_STDOUT_CAP = 64 * 1024;
+const PROBE_KILL_WAIT_MS = 2000;
 const DEFAULT_LOG_SIZE = "2000";
 
 function formatArg(value) {
@@ -40,11 +42,17 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
   const execArgs = isJsScript ? [launcher, "--version"] : ["--version"];
   // Through a shell, a missing launcher still spawns (the shell does) and would read as found.
   if (options?.shell && !isJsScript && !commandExists(launcher)) return Promise.resolve({ found: false, version: null });
+  const aborted = { version: null, error: "version probe aborted by MCP host" };
+  // Interrupted already: nothing is spawned, and found comes from the lookup alone.
+  if (signal?.aborted) {
+    return Promise.resolve({ found: isJsScript ? existsSync(launcher) : commandExists(launcher), ...aborted });
+  }
   return new Promise((resolve) => {
     let settled = false;
     let stdout = "";
     let timer;
     let onAbort;
+    let abortRequested = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
@@ -63,7 +71,9 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     child.stderr?.on("data", () => {});
     child.stderr?.on("error", () => {});
     child.on("error", () => finish({ found: false, version: null }));
+    const closed = new Promise((r) => child.once("close", r));
     child.on("close", (code) => {
+      if (abortRequested) return;
       const version = code === 0 ? stdout.trim() || null : null;
       finish({
         found: true,
@@ -79,12 +89,14 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     }, timeoutMs);
     timer.unref?.();
     // A host interrupt ends the probe at once rather than at its timeout.
+    // Returns once the probe has closed, so doctor does not leave it running; bounded like stop().
     onAbort = () => {
-      if (child.pid) treeKill(child.pid).catch(() => {});
-      finish({ found: true, version: null, error: "version probe aborted by MCP host" });
+      abortRequested = true;
+      const killed = child.pid ? treeKill(child.pid).catch(() => {}) : Promise.resolve();
+      const bound = new Promise((r) => setTimeout(r, PROBE_KILL_WAIT_MS).unref?.());
+      Promise.race([Promise.all([killed, closed]), bound]).then(() => finish({ found: true, ...aborted }));
     };
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
