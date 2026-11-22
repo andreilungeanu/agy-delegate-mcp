@@ -205,11 +205,8 @@ const MAX_COMMAND_CHARS = 150;
 
 const commandFailed = (c) => (c.exitCode !== undefined && c.exitCode !== 0) || (c.status !== undefined && c.status !== "completed");
 
-// What the agent did, from its tool calls: a count per ACP kind and the commands it ran with the
-// exit code agy reported. A non-zero exit still arrives as completed, so exitCode is the outcome;
-// status appears only for a command that did not complete. A command run more than once is listed
-// once, at its last run, with runs counting them. agy's own files (the plan) are reported as plan
-// and artifacts instead.
+// agy reports a non-zero exit as completed, so exitCode is the outcome. agy's own files (the plan)
+// are reported as plan and artifacts instead.
 export function executionSummary(records) {
   const calls = [...records.values()].filter((r) => !r.artifact);
   if (!calls.length) return undefined;

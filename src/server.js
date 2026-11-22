@@ -426,7 +426,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
   return server;
 }
 
-// A 2026-07-28 client sends its identity with each request; a 2025-era one sent it once, in
+// A 2026-07-28 client sends its identity with each request; a 2025-era one sends it once, in
 // initialize, which the server's getters return.
 export function clientInfoOf(server, ctx) {
   const envelope = ctx?.mcpReq?.envelope;
