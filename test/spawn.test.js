@@ -41,7 +41,7 @@ test("splitArgs handles empty and undefined input", () => {
   assert.deepEqual(splitArgs(undefined), []);
 });
 
-test("resolveAcpSpawn defaults to agy acp with --dangerously-skip-permissions when env vars are unset", () => {
+test("resolveAcpSpawn defaults to agy acp with --dangerously-skip-permissions and --disable-telemetry when env vars are unset", () => {
   const prevCmd = process.env.ACP_AGENT_COMMAND;
   const prevArgs = process.env.ACP_AGENT_ARGS;
   delete process.env.ACP_AGENT_COMMAND;
@@ -49,7 +49,7 @@ test("resolveAcpSpawn defaults to agy acp with --dangerously-skip-permissions wh
   try {
     const spec = resolveAcpSpawn();
     assert.equal(spec.command, "agy");
-    assert.deepEqual(spec.args, ["acp", "--dangerously-skip-permissions"]);
+    assert.deepEqual(spec.args, ["acp", "--dangerously-skip-permissions", "--disable-telemetry"]);
   } finally {
     if (prevCmd !== undefined) process.env.ACP_AGENT_COMMAND = prevCmd;
     if (prevArgs !== undefined) process.env.ACP_AGENT_ARGS = prevArgs;

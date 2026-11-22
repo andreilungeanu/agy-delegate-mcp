@@ -25,8 +25,8 @@ export function splitArgs(raw) {
 
 // --dangerously-skip-permissions makes agy approve its own tool calls. The request router approves
 // any permission request too, but a subagent's command can wait without raising one (agy #1658),
-// which only the flag covers.
-export const DEFAULT_AGENT_ARGS = Object.freeze(["acp", "--dangerously-skip-permissions"]);
+// which only the flag covers. --disable-telemetry is agy's own switch for its telemetry.
+export const DEFAULT_AGENT_ARGS = Object.freeze(["acp", "--dangerously-skip-permissions", "--disable-telemetry"]);
 
 // shell:true on win32 marks the spec for the Windows launch at each spawn site (spawnArgv): the
 // command is found first and started by file type, and only a .cmd or .bat reaches cmd.exe, which

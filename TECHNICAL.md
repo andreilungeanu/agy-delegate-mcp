@@ -5,7 +5,7 @@ Details for integrators and contributors. For a quick start, see [README.md](REA
 ## Architecture
 
 MCP host (orchestrator) → MCP `delegate` tool → this bridge → **agy** over ACP (stdio JSON-RPC),
-launched as `agy acp --dangerously-skip-permissions`.
+launched as `agy acp --dangerously-skip-permissions --disable-telemetry`.
 
 The bridge auto-approves every permission request and returns named fields (`sessionId`, `filesReportedByEditTools`, optional `plan` and `artifacts`) instead of scraping stdout.
 
@@ -64,7 +64,7 @@ diagnostic, not fail the call.
 
 ## ACP behavior (verified against agy 1.5.13–1.5.14)
 
-- **Launch**: `agy acp --dangerously-skip-permissions`. agy then approves its own tool calls and
+- **Launch**: `agy acp --dangerously-skip-permissions --disable-telemetry`. agy then approves its own tool calls and
   sends no `session/request_permission`. Any request that does arrive is answered with the
   broadest allow option by `kind` (`allow_always`, else `allow_once`); if neither is offered the
   request is answered `cancelled` rather than selecting a reject.
@@ -107,7 +107,7 @@ diagnostic, not fail the call.
 | Variable | Description |
 | -------- | ----------- |
 | `ACP_AGENT_COMMAND` | Override agent launcher command (default `agy`). |
-| `ACP_AGENT_ARGS` | Override agent launcher args (default `acp --dangerously-skip-permissions`). |
+| `ACP_AGENT_ARGS` | Override agent launcher args (default `acp --dangerously-skip-permissions --disable-telemetry`). |
 | `ACP_LOG_SIZE` | Flight recorder frame count (`0` = off). Recording runs only while `AGY_DELEGATE_TRANSCRIPT` is set. |
 | `AGY_DELEGATE_TRANSCRIPT` | Frames of raw ACP transcript to append to failure messages; unset = none. Contains prompts, tool inputs/outputs and agent messages — use it only when debugging the bridge itself. |
 | `AGY_DELEGATE_HANDSHAKE_MS` | Handshake deadline (default 60 s). |

@@ -2,7 +2,7 @@
 
 ## What this plugin does
 
-`agy-delegate-mcp` spawns **agy** (`agy acp --dangerously-skip-permissions`) in your workspace,
+`agy-delegate-mcp` spawns **agy** (`agy acp --dangerously-skip-permissions --disable-telemetry`) in your workspace,
 so agy approves its own tool calls, and the bridge **auto-approves every permission request**
 that still arrives over ACP, in every mode — `agent`, `plan` and `ask`. Each request is answered
 with the broadest allow option agy offered (`allow_always`, else `allow_once`).

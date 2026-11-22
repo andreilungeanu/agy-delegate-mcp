@@ -1,7 +1,7 @@
 # delegate tool reference
 
 Architecture: MCP host → MCP `delegate` → agy-delegate-mcp → **agy** (Antigravity CLI) over ACP,
-launched as `agy acp --dangerously-skip-permissions`.
+launched as `agy acp --dangerously-skip-permissions --disable-telemetry`.
 
 ## Input
 
