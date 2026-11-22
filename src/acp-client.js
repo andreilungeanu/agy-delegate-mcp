@@ -280,13 +280,17 @@ export class AcpClient extends EventEmitter {
       : Promise.resolve(true);
     // Runs for an exited child too: the agent can be gone while the commands it spawned are still
     // running, and on POSIX they stay in its process group, which is the only handle left on them.
-    treeKill(child.pid, { childAlive: alive }).catch(() => {});
+    const killed = treeKill(child.pid, { childAlive: alive }).catch(() => {});
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
     const bounded = /** @type {Promise<boolean>} */ (new Promise((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);
     }));
     const observed = await Promise.race([exited, bounded]);
+    // The tree kill is awaited too, on the same deadline: on POSIX it walks the tree with ps before
+    // signalling, and an agent that exits by itself meanwhile resolved stop() with its session's
+    // commands not yet killed.
+    await Promise.race([killed, bounded]);
     clearTimeout(timer);
     // The exit handler rejects in-flight RPCs with stderr. Doing that here on a confirmed
     // exit would race it and the first settlement would drop the forensics. A stop that

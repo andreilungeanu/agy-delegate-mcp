@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -497,4 +497,35 @@ test("spawning through a shell raises no DEP0190 warning", () => {
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 20000 });
   assert.equal(child.status, 0, child.stderr);
   assert.doesNotMatch(child.stderr, /DEP0190/);
+});
+
+// treeKill walks the tree with ps before it signals anything. An agent that exited by itself during
+// that walk resolved stop() at once, and its session's commands were signalled only afterwards: a
+// shutdown exiting on stop() left them running. A ps that answers late makes the window reliable.
+test("stop() resolves only after the commands agy left in their own session are killed", { skip: process.platform === "win32" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-ps-shim-"));
+  const pidFile = join(dir, "grandchild.pid");
+  writeFileSync(join(dir, "ps"), '#!/bin/sh\nout=$(/bin/ps "$@")\nsleep 1\nprintf "%s\n" "$out"\n');
+  chmodSync(join(dir, "ps"), 0o755);
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${dir}:${savedPath}`;
+  let grandchild;
+  try {
+    const client = new AcpClient({
+      spawnSpec: {
+        command: process.execPath,
+        args: [fileURLToPath(new URL("./fixtures/exits-leaving-session-child.js", import.meta.url)), pidFile, "300"],
+        options: { shell: false },
+      },
+    });
+    await client.start();
+    await until(() => { try { return readFileSync(pidFile, "utf8").endsWith("\n"); } catch { return false; } }, 5000, "fixture never wrote its child's pid");
+    grandchild = Number(readFileSync(pidFile, "utf8").trim());
+    await client.stop();
+    assert.ok(!pidAlive(grandchild), "the session's command must be killed when stop() resolves");
+  } finally {
+    process.env.PATH = savedPath;
+    if (grandchild && pidAlive(grandchild)) { try { process.kill(grandchild, "SIGKILL"); } catch {} }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
