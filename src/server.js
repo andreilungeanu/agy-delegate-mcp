@@ -2,7 +2,7 @@
 import process from "node:process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { McpServer, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY } from "@modelcontextprotocol/server";
+import { McpServer, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 import { runDelegate as runDelegateDefault } from "./delegate.js";
@@ -133,6 +133,7 @@ export const doctorOutputShape = {
     name: z.string().nullable(),
     version: z.string().nullable(),
     capabilities: z.record(z.string(), z.unknown()),
+    protocolVersion: z.string().optional(),
   }).passthrough(),
   agent: z.object(doctorAgentShape).passthrough(),
   runtime: z.object({
@@ -416,6 +417,7 @@ export function clientInfoOf(server, ctx) {
   return {
     capabilities: envelope?.[CLIENT_CAPABILITIES_META_KEY] ?? server.server.getClientCapabilities(),
     version: envelope?.[CLIENT_INFO_META_KEY] ?? server.server.getClientVersion(),
+    protocolVersion: envelope?.[PROTOCOL_VERSION_META_KEY] ?? server.server.getNegotiatedProtocolVersion(),
   };
 }
 
