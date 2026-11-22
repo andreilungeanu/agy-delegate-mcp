@@ -527,7 +527,9 @@ test("stop() resolves only after the commands agy left in their own session are 
     grandchild = Number(readFileSync(pidFile, "utf8").trim());
     writeFileSync(agentPidFile, String(client.child.pid));
     await client.stop();
-    assert.ok(!pidAlive(grandchild), "the session's command must be killed when stop() resolves");
+    // A SIGKILL lands asynchronously (macOS has no /proc to see a zombie by), so allow a beat; the
+    // kill this guards against comes a full second late, after the shim answers.
+    await until(() => !pidAlive(grandchild), 300, "the session's command must be killed when stop() resolves");
   } finally {
     process.env.PATH = savedPath;
     if (grandchild && pidAlive(grandchild)) { try { process.kill(grandchild, "SIGKILL"); } catch {} }
