@@ -41,6 +41,12 @@ export class SessionSupervisor {
     this.sessionId = sessionId;
   }
 
+  // True once the delegation is decided: a trip (exit, abort, a deadline) or the work's own end.
+  // Work still running after a trip reads this to stop, since the race no longer awaits it.
+  get settled() {
+    return this._settled;
+  }
+
   msSinceActivity() {
     return Date.now() - this.lastActivityAt;
   }

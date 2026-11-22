@@ -91,6 +91,8 @@ export class AcpClient extends EventEmitter {
     const emitExit = (code, signal) => {
       if (this._exitEmitted) return;
       this._exitEmitted = true;
+      // A steer to an exited agent has nowhere to go.
+      this._steerable = false;
       const stderr = this.stderrBuffer;
       const err = makeError(
         "agent-exit",

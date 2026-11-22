@@ -1836,3 +1836,26 @@ test("in ask mode a steer carries the same read-only instruction as the prompt",
   assert.match(preamble, /Do not edit files/);
   assert.equal(texts[1], `${preamble}\n\nlook at b.js instead`);
 });
+
+// The supervisor fails the delegation on agent exit, but nothing stopped the background wait,
+// which polled on for the rest of AGY_DELEGATE_BACKGROUND_WAIT_MS with the steer window open.
+test("an agent that exits during the background wait ends the wait too", async () => {
+  let reads = 0;
+  let client;
+  await assert.rejects(
+    runDelegate({
+      spec: "run it", mode: "agent", workspace: process.cwd(),
+      clientFactory: () => {
+        client = backgroundFactory({})();
+        Object.defineProperty(client, "cancelRequested", { get: () => { reads++; return false; } });
+        setTimeout(() => client.emit("exit", { code: 1, signal: null, stderr: "" }), 150);
+        return client;
+      },
+      backgroundWaitMs: 10000, backgroundSettleMs: 20, backgroundContinueMs: 10000,
+    }),
+    (err) => err.reason === "agent-exit",
+  );
+  const atFailure = reads;
+  await new Promise((r) => setTimeout(r, 400));
+  assert.ok(reads - atFailure <= 1, `the wait polled ${reads - atFailure} more times after the delegation failed`);
+});

@@ -266,6 +266,19 @@ test("newSession sends an appended system prompt only when asked for one", async
   }
 });
 
+test("an agent that exits closes the steer window", async () => {
+  const client = new AcpClient({ spawnSpec: fakeSpawn() });
+  await client.start();
+  await client.initialize();
+  const { sessionId } = await client.newSession(process.cwd());
+  client.acceptSteers(true);
+  const exited = new Promise((resolve) => client.once("exit", resolve));
+  process.kill(client.child.pid);
+  await exited;
+  assert.equal(client.steer(sessionId, "go left"), false);
+  await client.stop();
+});
+
 test("a graceful stop still kills an agent that ignores session/close and EOF", async () => {
   const client = new AcpClient({
     spawnSpec: {

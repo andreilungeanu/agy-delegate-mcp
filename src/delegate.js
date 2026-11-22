@@ -410,6 +410,8 @@ export async function runDelegate({
       await new Promise((r) => setTimeout(r, Math.min(250, backgroundSettleMs)));
       backgroundWaited = Date.now() - startedAt;
       if (backgroundWaited >= backgroundWaitMs) return;
+      // The delegation already failed (agent exit, abort, hard cap): nobody reads this wait.
+      if (supervisor.settled) return;
       if (client.cancelRequested) return "cancelled";
       // A steer redirects the turn; its own prompt reply is what ends it now.
       if (client.hasSteer?.()) return;
