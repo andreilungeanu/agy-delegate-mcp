@@ -85,8 +85,8 @@ export class AcpClient extends EventEmitter {
       }
     });
     this.child.stderr.on("error", () => {});
-    // A write after the agent is gone raises 'error' on stdin, and readline puts no handler on
-    // stdout; unhandled, either takes down the server.
+    // A write after the agent is gone raises 'error' on stdin. readline forwards stdout's errors only
+    // until it closes. Unhandled, either takes down the server.
     this.child.stdin.on("error", () => {});
     this.child.stdout.on("error", () => {});
     const emitExit = (code, signal) => {
