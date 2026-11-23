@@ -27,9 +27,9 @@ const isAlive = (pid) => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
 
-// The launcher writes its pid and never answers --version; stdin EOF is a stdio host's shutdown.
-// On win32 a child that is not detached dies with the server regardless.
-test("a host shutdown during doctor's version probe stops the probe", { skip: process.platform === "win32" && "win32 kills it with the server" }, async () => {
+// The real server with a doctor call held in its version probe: the launcher writes its pid and
+// never answers --version.
+async function serverInDoctorProbe(t) {
   const pidFile = join(tmpdir(), `agy-shutdown-probe-${process.pid}-${Date.now()}`);
   const server = spawn(process.execPath, [ENTRY], {
     env: {
@@ -41,21 +41,38 @@ test("a host shutdown during doctor's version probe stops the probe", { skip: pr
   });
   const exited = new Promise((resolve) => server.once("exit", resolve));
   let pid;
-  try {
-    const send = (msg) => server.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
-    send({ id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } });
-    send({ method: "notifications/initialized" });
-    send({ id: 2, method: "tools/call", params: { name: "doctor", arguments: {} } });
-    const deadline = Date.now() + 10000;
-    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-    pid = Number(readFileSync(pidFile, "utf8").trim());
-    assert.ok(isAlive(pid), "the probe is running when the host shuts down");
-    server.stdin.end();
-    await exited;
-    assert.equal(isAlive(pid), false, "the probe must be gone when the server exits");
-  } finally {
+  t.after(() => {
     if (pid && isAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch {}
     server.kill();
     rmSync(pidFile, { force: true });
-  }
+  });
+  const send = (msg) => server.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
+  send({ id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } });
+  send({ method: "notifications/initialized" });
+  send({ id: 2, method: "tools/call", params: { name: "doctor", arguments: {} } });
+  const deadline = Date.now() + 10000;
+  while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  pid = Number(readFileSync(pidFile, "utf8").trim());
+  assert.ok(isAlive(pid), "the probe is running when the host shuts down");
+  return { server, exited, pid };
+}
+
+// stdin EOF is a stdio host's shutdown. On win32 a child that is not detached dies with the server.
+test("a host shutdown during doctor's version probe stops the probe", { skip: process.platform === "win32" && "win32 kills it with the server" }, async (t) => {
+  const { server, exited, pid } = await serverInDoctorProbe(t);
+  server.stdin.end();
+  await exited;
+  assert.equal(isAlive(pid), false, "the probe must be gone when the server exits");
+});
+
+// The SIGTERM lands while the SIGHUP's stop is still in its ps walk, before any kill.
+test("a second signal during shutdown kills doctor's version probe before the server exits", { skip: process.platform === "win32" && "POSIX signals" }, async (t) => {
+  const { server, exited, pid } = await serverInDoctorProbe(t);
+  server.kill("SIGHUP");
+  server.kill("SIGTERM");
+  await exited;
+  // Killed, it is reaped by init once the server is gone, a moment after the exit.
+  const reaped = Date.now() + 1000;
+  while (isAlive(pid) && Date.now() < reaped) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(isAlive(pid), false, "the probe must not outlive the server");
 });

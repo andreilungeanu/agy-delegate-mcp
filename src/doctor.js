@@ -37,7 +37,7 @@ function envReport(name, fallback = null) {
  * Time-boxed: doctor runs when delegation is already broken, so it must survive a wedged launcher.
  * @param {{ command: string, args?: string[], options?: any }} spawnSpec
  * @param {number} [timeoutMs]
- * @param {{ signal?: AbortSignal, onSpawn?: (probe: { pid: number, stop: () => Promise<boolean> }) => void }} [opts]
+ * @param {{ signal?: AbortSignal, onSpawn?: (probe: { pid: number, stop: () => Promise<boolean>, killNow: () => void }) => void }} [opts]
  */
 export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, { signal, onSpawn } = {}) {
   const { command, args, options } = spawnSpec;
@@ -90,7 +90,14 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       const bound = new Promise((r) => setTimeout(() => r(false), PROBE_KILL_WAIT_MS).unref?.());
       return Promise.race([Promise.all([killed, closed]).then(() => true), bound]);
     };
-    if (child.pid) onSpawn?.({ pid: child.pid, stop });
+    // For a shutdown's second signal, which exits at once: SIGKILL to the group and the probe, with
+    // no ps walk. POSIX only; on win32 the probe dies with the server.
+    const killNow = () => {
+      if (!open || process.platform === "win32") return;
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      if (isChildAlive(child)) { try { process.kill(child.pid, "SIGKILL"); } catch {} }
+    };
+    if (child.pid) onSpawn?.({ pid: child.pid, stop, killNow });
     child.on("close", (code) => {
       if (abortRequested) return;
       const version = code === 0 ? stdout.trim() || null : null;
