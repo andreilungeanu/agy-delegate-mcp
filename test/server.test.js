@@ -6,7 +6,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { InMemoryTransport, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY } from "@modelcontextprotocol/server";
 import { Client } from "@modelcontextprotocol/client";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { AcpClient } from "../src/acp-client.js";
@@ -57,6 +57,26 @@ for (const [era, versionNegotiation] of ERAS) {
       await close();
     }
   });
+
+  if (era === "2025") {
+    test("on a 2025-era connection initialize names the host, not envelope keys a request carries", async () => {
+      const runDoctor = async ({ getClientInfo }) => getClientInfo();
+      const { client, close } = await connectEra(versionNegotiation, { runDoctor });
+      try {
+        const _meta = {
+          [CLIENT_INFO_META_KEY]: { name: "envelope-host", version: "9" },
+          [CLIENT_CAPABILITIES_META_KEY]: { sampling: {} },
+          [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
+        };
+        const info = payload(await client.callTool({ name: "doctor", arguments: {}, _meta }));
+        assert.equal(info.version?.name, "era-host");
+        assert.deepEqual(info.capabilities, { elicitation: { form: {} } });
+        assert.match(info.protocolVersion, /^2025-/);
+      } finally {
+        await close();
+      }
+    });
+  }
 
   test(`delegate sends progress and sees the host's cancellation on a ${era}-era connection`, async () => {
     let aborted;
