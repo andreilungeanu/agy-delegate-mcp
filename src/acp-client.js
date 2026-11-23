@@ -155,8 +155,7 @@ export class AcpClient extends EventEmitter {
     if (typeof res?.sessionId === "string") this._sessions.add(res.sessionId);
     return res;
   }
-  // resume reopens a session without replaying it. Unlike session/load, which agy answers with a
-  // fresh session for an id it has never seen, resume rejects an unknown id.
+  // resume reopens a session without replaying it, and rejects an id agy has never seen.
   async resumeSession(sessionId, cwd) {
     const res = this._captureSession(await this.peer.request("session/resume", { sessionId, cwd, mcpServers: [] }));
     this._sessions.add(sessionId);

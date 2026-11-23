@@ -63,7 +63,7 @@ Fields relayed verbatim from the agent are typed as unknown in the schema on pur
 what you run when the agent is already misbehaving, so a weird `protocolVersion` must read as a
 diagnostic, not fail the call.
 
-## ACP behavior (verified against agy 1.5.13–1.5.14)
+## ACP behavior (verified against agy 1.5.13–1.5.15)
 
 - **Launch**: `agy acp --dangerously-skip-permissions --disable-telemetry`. agy then approves its own tool calls and
   sends no `session/request_permission`. Any request that does arrive is answered with the
