@@ -314,6 +314,23 @@ test("steer reports not-ready before the window opens and not-running once it ha
   await client.stop();
 });
 
+test("a steer that goes out is announced, and a refused one is not", async () => {
+  const client = new AcpClient({ spawnSpec: fakeSpawn() });
+  await client.start();
+  await client.initialize();
+  try {
+    const { sessionId } = await client.newSession(process.cwd());
+    let announced = 0;
+    client.on("steer", () => announced++);
+    assert.equal(client.steer(sessionId, "x"), "not-ready");
+    client.acceptSteers(true);
+    assert.equal(client.steer(sessionId, "go left"), "steered");
+    assert.equal(announced, 1);
+  } finally {
+    await client.stop();
+  }
+});
+
 test("a graceful stop still kills an agent that ignores session/close and EOF", async () => {
   const client = new AcpClient({
     spawnSpec: {

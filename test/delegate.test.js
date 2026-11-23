@@ -12,6 +12,7 @@ import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 import { runDelegate as rawRunDelegate, readUsage, RECENT_COMMANDS, OLDER_FAILED_COMMANDS } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
+import { askingClientFactory } from "./fixtures/asking-client.js";
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
 // Nothing else checks it: the shape is not declared to hosts, so a field added here but
@@ -545,6 +546,22 @@ test("questions is reported alongside the warning for a background command still
   ]);
   assert.equal(out.questions.length, 2);
   assert.match(out.protocolWarnings.join(" "), /npm run dev/);
+});
+
+test("a steer closes the question agy leaves open, so it is not returned", async () => {
+  const factory = askingClientFactory({ leavesOpen: true });
+  const out = await runDelegate({
+    spec: "Rename the variable.", mode: "agent", workspace: process.cwd(),
+    // The steer goes out while agy's question is open, before its turn ends.
+    clientFactory: (o) => {
+      const client = factory(o);
+      const prompt = client.prompt;
+      client.prompt = async (...args) => { const turn = await prompt(...args); client.steer("sess-ask", "use b.js"); return turn; };
+      return client;
+    },
+  });
+  assert.equal("questions" in out, false);
+  assert.equal(out.result, "Renamed as answered.");
 });
 
 test("runDelegate joins streamed fragments into complete-sentence progress", async () => {

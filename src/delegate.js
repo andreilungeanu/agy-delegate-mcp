@@ -350,6 +350,9 @@ export async function runDelegate({
     supervisor.cancelSetup();
   };
   client.on?.("cancel", onCancel);
+  // agy takes the next prompt as its open question's answer, and can leave the call open.
+  const onSteer = () => { for (const id of state.openQuestionCalls()) state.updateToolStatus(id, "completed"); };
+  client.on?.("steer", onSteer);
   const cancelledInSetup = { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
 
   // The bridge cannot see inside a shell command, so silence is reported, not acted on.
@@ -738,6 +741,7 @@ export async function runDelegate({
     clearInterval(heartbeat);
     signal?.removeEventListener("abort", onAbort);
     client.off?.("cancel", onCancel);
+    client.off?.("steer", onSteer);
     try { supervisor.finish(); } catch {}
     // Awaited, so agy has exited when the caller gets the result, or a warning says the exit was not
     // seen; otherwise agy still holds the workspace as its cwd (deleting it fails with EBUSY on

@@ -186,6 +186,7 @@ export class AcpClient extends EventEmitter {
     const body = this._steerPrefix ? `${this._steerPrefix}\n\n${text}` : text;
     // Stamped, so it never rejects unobserved.
     this._steers.push(stampSettlement(this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] })));
+    this.emit("steer");
     return "steered";
   }
   hasSteer() { return this._steers.length > 0; }

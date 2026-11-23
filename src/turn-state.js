@@ -179,9 +179,13 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
       return true;
     },
 
-    // Questions of the ask_question calls still open, in the order agy asked them.
+    // The ask_question calls still open whose questions were read, in the order agy asked them.
+    openQuestionCalls() {
+      return [...state.activeToolCalls].filter((id) => state.isQuestion(id) && state.questions.has(id));
+    },
+
     openQuestions() {
-      return [...state.activeToolCalls].filter((id) => state.isQuestion(id)).flatMap((id) => state.questions.get(id) ?? []);
+      return state.openQuestionCalls().flatMap((id) => state.questions.get(id));
     },
 
     // True while a message chunk still belongs in the result: before any tool ran, or after
