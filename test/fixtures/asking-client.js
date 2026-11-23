@@ -1,5 +1,6 @@
 // A stub agy asking as agy 1.5.14 does: the ask_question call stays pending and the turn ends. It
-// takes a steer as the answer and leaves the call open. questions is the call's payload.
+// takes a steer as the answer and leaves the call open; it refuses the first `rejects` steers.
+// questions is the call's payload.
 import { EventEmitter } from "node:events";
 import { stampSettlement } from "../../src/acp-client.js";
 
@@ -8,7 +9,7 @@ const ASKED = [
   { is_multi_select: true, options: ["node b.js", "npm test"], question: "Which checks should run?" },
 ];
 
-export function askingClientFactory({ questions = ASKED } = {}) {
+export function askingClientFactory({ questions = ASKED, rejects = 0 } = {}) {
   return () => {
     const client = new EventEmitter();
     let open = false;
@@ -33,6 +34,7 @@ export function askingClientFactory({ questions = ASKED } = {}) {
       steer: () => {
         if (!open) return "not-running";
         client.emit("steer");
+        if (rejects-- > 0) { steers.push(stampSettlement(Promise.reject(new Error("agy refused the prompt")))); return "steered"; }
         steers.push(stampSettlement((async () => {
           update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Renamed as answered." } });
           return { stopReason: "end_turn", usage };

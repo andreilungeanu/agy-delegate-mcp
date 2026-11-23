@@ -150,6 +150,12 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
       }
     },
 
+    // Reopens a call the bridge closed itself, for a steer agy then rejected.
+    reopenTool(toolCallId) {
+      state.finishedToolCalls.delete(toolCallId);
+      state.updateToolStatus(toolCallId, "pending");
+    },
+
     // Unfinished calls that end on their own: a backgrounded command or a scheduled wake-up. An
     // ask_question waits on the caller instead, so it is never waited for.
     backgroundToolCalls() {

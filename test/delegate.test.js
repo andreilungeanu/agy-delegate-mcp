@@ -549,18 +549,35 @@ test("questions is reported alongside the warning for a background command still
 });
 
 // Steers while agy's question is open, before its turn ends.
-const steerDuringAsk = (opts) => {
+const steerDuringAsk = (opts, steers = 1) => {
   const factory = askingClientFactory(opts);
   return (o) => {
     const client = factory(o);
     const prompt = client.prompt;
-    client.prompt = async (...args) => { const turn = await prompt(...args); client.steer("sess-ask", "use b.js"); return turn; };
+    client.prompt = async (...args) => {
+      const turn = await prompt(...args);
+      for (let i = 0; i < steers; i++) client.steer("sess-ask", "use b.js");
+      return turn;
+    };
     return client;
   };
 };
 
 test("a steer closes the question agy leaves open, so it is not returned", async () => {
   const out = await runDelegate({ spec: "Rename the variable.", workspace: process.cwd(), clientFactory: steerDuringAsk() });
+  assert.equal("questions" in out, false);
+  assert.equal(out.result, "Renamed as answered.");
+});
+
+test("a steer agy rejects leaves its question open, and returned", async () => {
+  const out = await runDelegate({ spec: "Rename the variable.", workspace: process.cwd(), clientFactory: steerDuringAsk({ rejects: 1 }) });
+  assert.equal(out.questions.length, 2);
+  assert.equal(out.result, "Which file?");
+  assert.match(out.protocolWarnings.join(" "), /a steer was rejected by agy/);
+});
+
+test("a question a rejected steer closed stays closed when a steer behind it gets through", async () => {
+  const out = await runDelegate({ spec: "Rename the variable.", workspace: process.cwd(), clientFactory: steerDuringAsk({ rejects: 1 }, 2) });
   assert.equal("questions" in out, false);
   assert.equal(out.result, "Renamed as answered.");
 });

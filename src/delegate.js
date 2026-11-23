@@ -350,8 +350,15 @@ export async function runDelegate({
     supervisor.cancelSetup();
   };
   client.on?.("cancel", onCancel);
-  // agy takes the next prompt as its open question's answer, and can leave the call open.
-  const onSteer = () => { for (const id of state.openQuestionCalls()) state.updateToolStatus(id, "completed"); };
+  // agy takes the next prompt as its open question's answer, and can leave the call open. Closed as
+  // the steer goes out, so its reply is the result, and kept per steer to reopen if agy rejects it.
+  /** @type {any[][]} */
+  const closedBySteer = [];
+  const onSteer = () => {
+    const ids = state.openQuestionCalls();
+    for (const id of ids) state.updateToolStatus(id, "completed");
+    closedBySteer.push(ids);
+  };
   client.on?.("steer", onSteer);
   const cancelledInSetup = { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
 
@@ -562,6 +569,7 @@ export async function runDelegate({
           }
           const steer = client.takeSteer?.();
           if (!steer) break;
+          const closed = closedBySteer.shift() ?? [];
           const reply = await steer;
           if (reply.ok) {
             turn = reply.value;
@@ -571,6 +579,9 @@ export async function runDelegate({
           } else if (reply.seq < turnSeq) {
             // Refused before its target settled: that turn stands, and the warning tells the caller.
             steerWarnings.push(`a steer was rejected by agy and did not redirect the turn: ${reply.error?.message || String(reply.error)}`);
+            // Its questions stay closed if a steer queued behind it reaches agy.
+            if (closedBySteer.length) closedBySteer[0].push(...closed);
+            else for (const id of closed) state.reopenTool(id);
           } else {
             // Failed after taking the turn over: the turn failed, unless a steer queued behind it
             // succeeds.
