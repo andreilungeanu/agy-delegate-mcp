@@ -156,7 +156,7 @@ grace period. `killed` means the process was observed to exit; a force that cann
 exit reports `cancelled` and keeps the session cancellable, so force can be retried.
 `not-running` means the turn already ended — the session is still resumable via
 `resumeSessionId`, and with `force` the agent's shutdown is cut short; `not-found` means the id is
-not in this process's recent session history.
+not in this process's session history.
 
 **`steer`** — `{sessionId, message}` → `status: "steered" | "not-ready" | "not-running" | "not-found"`.
 Sends `message` into the running turn as a new instruction; `delegate` (or its task) then returns
@@ -167,7 +167,7 @@ message was sent. agy refusing it lands in the delegate result's `protocolWarnin
 continues unredirected; a steered turn that then fails fails the `delegate` call, as the turn would.
 `not-ready` means the delegation has not sent its prompt yet — retry; `not-running` means the turn
 ended, was cancelled or lost its agent — resume instead; `not-found` means the id is not in this
-process's recent session history. Usable only from a host that can call a tool while `delegate` is
+process's session history. Usable only from a host that can call a tool while `delegate` is
 still running.
 
 **`doctor`** — `{deep?}`. Always reports plugin version, MCP client `capabilities`,

@@ -43,16 +43,8 @@ function unregisterInFlight(map, sessionId, handle) {
   if (handles.size === 0) map.delete(sessionId);
 }
 // Session ids seen by this process, kept after the turn so cancel can tell a finished session
-// (still resumable) from an unknown id. Bounded.
+// (still resumable) from an unknown id.
 const seenSessions = new Set();
-const SEEN_SESSIONS_CAP = 500;
-function rememberSession(set, id) {
-  if (id == null) return;
-  // Delete-then-add makes the Set an LRU, so a session still being resumed does not age out.
-  if (set.has(id)) set.delete(id);
-  set.add(id);
-  if (set.size > SEEN_SESSIONS_CAP) set.delete(set.values().next().value);
-}
 
 // Delegations answered as MCP tasks. Module-level, as inFlight: a task outlives the request that
 // started it, and serveStdio may build more than one server instance.
@@ -244,7 +236,7 @@ export async function runDelegateTool({
         capturedSessionId = sessionId;
         handle = { client, cancelRequested: false };
         registerInFlight(inFlight, sessionId, handle);
-        rememberSession(seenSessions, sessionId);
+        seenSessions.add(sessionId);
         // Sent as the session opens, so a host that calls tools concurrently can cancel or steer
         // mid-run.
         onProgress(`session ready: ${sessionId}`);
@@ -335,7 +327,7 @@ export function buildServer({
     "cancel",
     {
       description:
-        "Best-effort cancel of an in-flight delegation by sessionId. session/cancel is advisory — the agent may finish the turn anyway, and the delegate result then carries cancelRequested. Status: cancelled, killed (agent process observed to exit), not-running (turn already ended, still resumable), not-found (id not in this process's recent session history).",
+        "Best-effort cancel of an in-flight delegation by sessionId. session/cancel is advisory — the agent may finish the turn anyway, and the delegate result then carries cancelRequested. Status: cancelled, killed (agent process observed to exit), not-running (turn already ended, still resumable), not-found (id not in this process's session history).",
       inputSchema: z.object({
         sessionId: sessionIdInput,
         force: z.boolean().default(false).describe("Kill the agent process if the turn is still running after a short grace period."),
@@ -403,7 +395,7 @@ export function buildServer({
     "steer",
     {
       description:
-        "Redirect an in-flight delegation by sessionId: message goes to agy as a new instruction for the running turn, and the delegate call returns the redirected turn's result. Status: steered (sent), not-ready (prompt not sent yet; retry), not-running (turn already ended — resume instead), not-found (id not in this process's recent session history).",
+        "Redirect an in-flight delegation by sessionId: message goes to agy as a new instruction for the running turn, and the delegate call returns the redirected turn's result. Status: steered (sent), not-ready (prompt not sent yet; retry), not-running (turn already ended — resume instead), not-found (id not in this process's session history).",
       inputSchema: z.object({
         sessionId: sessionIdInput,
         message: z.string().trim().min(1, "message must not be blank").describe("The new instruction for agy."),
