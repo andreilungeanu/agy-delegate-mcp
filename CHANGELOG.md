@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-23
+
+`delegate` no longer holds your agent while agy works. In an interactive Claude Code CLI session
+it runs as an MCP task: your agent stays free to plan, review or start the next delegation, and
+agy's result arrives when its turn ends. Codex and other hosts keep the blocking call. One thing
+changes on upgrade in Claude Code: the `delegate` call returns before agy has finished, and its
+result comes back as a task notification.
+
+### Added
+
+- The server serves the MCP Tasks extension (`io.modelcontextprotocol/tasks`, 2026-07-28) to a
+  request that lists it: `tasks/get`, `tasks/update` and `tasks/cancel`. A finished task's result
+  is kept for an hour, up to 100 tasks.
+- `cancel` and `steer` take a `delegate` task's id in `sessionId`, and `delegate` takes one in
+  `resumeSessionId`.
+
+### Changed
+
+- **Breaking: in an interactive Claude Code CLI session, `delegate` runs as an MCP task.** The call
+  returns once agy has the prompt, and the same result arrives as a task notification when the
+  turn ends. Progress shows as the task's status message in `/tasks`, and stopping the task
+  cancels the turn and stops agy. A stopped task's status message names the session to resume
+  (`cancelled; resume with resumeSessionId <id>`), with a note when the run had started a fresh
+  session after a failed resume or when agy may still be running. An argument agy rejects still
+  fails the call before the prompt. A request that does not list the extension, as Codex's does
+  not and Claude Code's does not from a subagent, is answered with the result, as before.
+
 ## [1.9.0] - 2026-11-23
 
 ### Changed
