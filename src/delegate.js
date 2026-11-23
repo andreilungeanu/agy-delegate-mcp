@@ -761,9 +761,6 @@ export async function runDelegate({
     client.off?.("cancel", onCancel);
     client.off?.("steer", onSteer);
     try { supervisor.finish(); } catch {}
-    // Awaited, so agy has exited when the caller gets the result, or a warning says the exit was not
-    // seen; otherwise agy still holds the workspace as its cwd (deleting it fails with EBUSY on
-    // Windows). The handle stays registered meanwhile, so a force cancel can cut the grace short.
     // Graceful after a completed turn, so agy closes its conversation database; a stall, abort or
     // exit is killed at once.
     const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
@@ -771,7 +768,9 @@ export async function runDelegate({
     const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };
     signal?.addEventListener("abort", abortClose, { once: true });
     let exited = false;
-    // A rejected stop counts as an exit not seen.
+    // Awaited, so agy has exited when the caller gets the result, or a warning says the exit was not
+    // seen; otherwise agy holds the workspace as its cwd (deleting it fails with EBUSY on Windows).
+    // The handle stays registered meanwhile, so a force cancel can cut the grace short.
     try { exited = await client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS }); } catch {}
     finally { signal?.removeEventListener("abort", abortClose); }
     if (exited === false) {

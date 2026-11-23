@@ -18,17 +18,17 @@ function descendantPids(pid) {
   return /** @type {Promise<number[]>} */ (new Promise((resolve) => {
     execFile("ps", ["-A", "-o", "pid=,ppid="], { timeout: 3000 }, (err, stdout) => {
       if (err) return resolve([]);
-      const children = new Map();
+      const byParent = new Map();
       for (const line of String(stdout).split("\n")) {
         const [p, pp] = line.trim().split(/\s+/).map(Number);
         if (!p || !Number.isFinite(pp)) continue;
-        if (!children.has(pp)) children.set(pp, []);
-        children.get(pp).push(p);
+        if (!byParent.has(pp)) byParent.set(pp, []);
+        byParent.get(pp).push(p);
       }
       const out = [];
       const queue = [pid];
       while (queue.length) {
-        for (const c of children.get(queue.shift()) ?? []) {
+        for (const c of byParent.get(queue.shift()) ?? []) {
           if (!out.includes(c)) { out.push(c); queue.push(c); }
         }
       }
@@ -66,8 +66,7 @@ export async function treeKill(pid, { childAlive = true } = {}) {
 // the tree walk is slow.
 export const KILL_WAIT_MS = 2000;
 
-// One kill attempt: true when the exit was seen.
-async function killTree(child, timeoutMs) {
+async function killAndSeeExit(child, timeoutMs) {
   if (!child.pid) return true;
   const alive = isChildAlive(child);
   // Subscribed before the kill, so an immediate exit is not missed.
@@ -89,8 +88,8 @@ async function killTree(child, timeoutMs) {
   return observed;
 }
 
-// Last resort for a process about to exit: SIGKILL to the group and the child, no ps walk. POSIX
-// only; on win32 the kill is taskkill, which a stop runs.
+// Last resort for a process about to exit: no ps walk. POSIX only; on win32 the kill is taskkill,
+// which a stop runs.
 function killGroupNow(child) {
   if (!child.pid || process.platform === "win32") return;
   try { process.kill(-child.pid, "SIGKILL"); } catch {}
@@ -107,15 +106,14 @@ function killGroupNow(child) {
  * @typedef {ReturnType<typeof createChildRegistry>} ChildRegistry
  */
 
-// The processes still to stop. An entry leaves once a stop saw its exit, after the tree kill, or
-// when its owner releases it; until then a second signal reaches it.
+// The processes still to stop. An entry leaves once a stop saw its exit and its tree kill ended, or
+// its owner releases it; until then a second signal kills it, and after it its pid may be reused.
 export function createChildRegistry() {
   /** @type {Map<TrackedChild, ChildKill>} */
   const live = new Map();
   let closed = false;
   return {
     /**
-     * Calls start, which spawns, only while the registry is open, and tracks what it started.
      * @param {() => ChildKill | null} start
      * @returns {TrackedChild | null}
      */
@@ -125,15 +123,12 @@ export function createChildRegistry() {
       if (!kill) return null;
       /** @type {Promise<boolean> | null} */
       let stopping = null;
-      // A rejection or a throw counts as an exit not seen.
       const attempt = (timeoutMs) => {
         try { return Promise.resolve(kill.kill(timeoutMs)).catch(() => false); } catch { return Promise.resolve(false); }
       };
       /** @type {TrackedChild} */
       const entry = {
         child: kill.child,
-        // Memoized while in flight. An attempt that did not see the exit is retried once; a stop that
-        // still did not is not memoized, so the next one kills again.
         stop: ({ timeoutMs = KILL_WAIT_MS } = {}) => {
           if (!live.has(entry)) return Promise.resolve(true);
           stopping ??= attempt(timeoutMs).then((seen) => seen || attempt(timeoutMs)).then((seen) => {
@@ -143,19 +138,17 @@ export function createChildRegistry() {
           });
           return stopping;
         },
-        // For a child that closed by itself. A stop under way keeps it until the stop settles.
+        // For a child that closed by itself.
         release: () => { if (!stopping) live.delete(entry); },
       };
       live.set(entry, kill);
       return entry;
     },
-    // Refuses every later spawn and resolves once every stop settled.
     stopAll() {
       closed = true;
       return Promise.all([...live.keys()].map((entry) => entry.stop())).then(() => undefined);
     },
-    // For a second signal, which exits at once. A child whose stop saw its exit has left: its pid
-    // may be reused by then.
+    // For a second signal, which exits at once.
     killAllNow() {
       closed = true;
       for (const kill of live.values()) kill.killNow();
@@ -166,8 +159,9 @@ export function createChildRegistry() {
 export const children = createChildRegistry();
 
 /**
- * The one place a process starts. Null when the launcher is not found; throws spawn-failed once
- * shutdown began, before spawning.
+ * The one place a process starts. Null when the launcher is not found, looked up before the spawn:
+ * through cmd.exe a missing one still spawns, and would read as an agent crash, or to doctor as
+ * found. Throws spawn-failed once shutdown began, before spawning.
  * @param {string} command @param {string[] | undefined} args @param {any} options
  * @param {{ cwd?: string, stdio: any }} where
  * @param {ChildRegistry} [registry]
@@ -178,6 +172,6 @@ export function spawnChild(command, args, options, { cwd, stdio }, registry = ch
     if (!launch) return null;
     const [file, argv] = spawnCommandLine(launch.command, launch.args, launch.options);
     const child = spawn(file, argv, { ...launch.options, ...(cwd ? { cwd } : {}), detached: DETACHED, stdio });
-    return { child, kill: (timeoutMs) => killTree(child, timeoutMs), killNow: () => killGroupNow(child) };
+    return { child, kill: (timeoutMs) => killAndSeeExit(child, timeoutMs), killNow: () => killGroupNow(child) };
   });
 }

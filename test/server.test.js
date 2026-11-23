@@ -860,7 +860,6 @@ test("a session still being resumed outlives an equally old one that was seen on
 });
 
 test("a shutdown during the handshake still kills the agent it spawned", async () => {
-  // The agent process exists from client.start(); its session id arrives about 3.4s later.
   const inFlight = new Map();
   const registry = createChildRegistry();
   let child;
@@ -982,8 +981,6 @@ test("steer tool forwards the message to a running delegation and reports each s
   }
 });
 
-// A finished delegation keeps its handle registered while it waits out agy's graceful stop. A
-// shutdown in that window must kill the agent rather than join the grace.
 test("shutdown kills an agent that is in its graceful stop instead of waiting out the grace", async () => {
   const registry = createChildRegistry();
   const client = stubClientFactory("close-ignoring-stub.js", registry)();

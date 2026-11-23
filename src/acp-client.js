@@ -55,8 +55,6 @@ export class AcpClient extends EventEmitter {
 
   async start() {
     const { command, args, options } = this.spawnSpec;
-    // Found before the spawn: through cmd.exe a missing launcher still spawns, and would read as an
-    // agent crash.
     const tracked = spawnChild(command, args, options, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"] }, this.registry);
     if (!tracked) {
       throw makeError("spawn-failed", `Failed to spawn agent (${command}): not found on PATH. Install the Antigravity CLI (agy) and sign in by running agy once.`);
@@ -202,10 +200,9 @@ export class AcpClient extends EventEmitter {
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 
-  // Memoized while in flight and after a confirmed exit; a missed exit is not, so a later stop kills
-  // again. graceMs > 0 first closes the sessions and stdin and waits that long: agy then exits 0 in
+  // graceMs > 0 first closes the sessions and stdin and waits that long: agy then exits 0 in
   // 200–400 ms with its database closed, where a kill leaves -shm and -wal files (measured, agy
-  // 1.5.14). The tracked child's stop follows either way. A force stop ends a grace in progress.
+  // 1.5.14). A force stop ends a grace in progress.
   /** @param {{ timeoutMs?: number, graceMs?: number }} [opts] */
   stop({ timeoutMs, graceMs = 0 } = {}) {
     if (this._stopping && graceMs <= 0) this._endGrace?.();

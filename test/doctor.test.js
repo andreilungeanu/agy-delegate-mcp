@@ -415,8 +415,6 @@ test("runDoctor deep:true lists agy's base model ids and reports the account tie
   assert.deepEqual(out.agent.handshake.tier, { name: "Google AI Pro", id: "g1-pro-tier" });
 });
 
-// doctor ran its handshake with no way in from the host: an interrupt left the agent to the
-// handshake timeout.
 test("runDoctor deep stops the agent at once when the host aborts", async () => {
   const controller = new AbortController();
   let client;

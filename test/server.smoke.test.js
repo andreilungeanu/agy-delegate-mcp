@@ -74,8 +74,8 @@ test("a second signal during shutdown kills doctor's version probe before the se
   assert.equal(isAlive(pid), false, "the probe must not outlive the server");
 });
 
-// deep starts the handshake agent once the probe ends, so the signal that ends the probe also
-// clears the way for the agent. It writes its pid over the probe's a moment after it starts.
+// deep starts the agent once the signal ends the probe; the stub, started as the agent, writes its
+// pid over the probe's within the 1 s wait.
 test("a signal during doctor's deep probe leaves no agent running after the server exits", { skip: process.platform === "win32" && "POSIX signals" }, async (t) => {
   const { server, exited, pid, pidFile } = await serverInDoctorProbe(t, { deep: true });
   server.kill("SIGTERM");

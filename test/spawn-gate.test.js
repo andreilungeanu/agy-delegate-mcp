@@ -7,8 +7,7 @@ import { join, relative } from "node:path";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const OWNER = "src/proc.js";
 
-// Each way in names the module in a string: import, export from, import(), require, and a
-// require made by createRequire.
+// Every way in names the module in a string literal.
 const REACHES_CHILD_PROCESS = /(["'`])(?:node:)?child_process\1/;
 
 function sources(dir) {

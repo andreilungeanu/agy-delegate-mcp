@@ -365,9 +365,8 @@ test("stop() is idempotent and reports the exit it observed", async () => {
   assert.equal(await client.stop(), true, "a later caller gets the same answer");
 });
 
-// A real agent cannot swallow SIGKILL, so its exit is hidden instead, as a kill that failed would
-// leave it: exitCode stays null and neither exit nor close is emitted. The pid stays real and is
-// still killed. Resolves when the process really exits.
+// A real agent cannot swallow SIGKILL, so its exit is hidden, as a failed kill would leave it; the
+// pid is still killed. Resolves on the real exit.
 function withholdExit(child) {
   for (const field of ["exitCode", "signalCode"]) {
     Object.defineProperty(child, field, { get: () => null, set: () => {}, configurable: true });

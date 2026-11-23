@@ -450,7 +450,7 @@ export function installSignalCleanup(registry = children, {
     exitCode = code;
     // Set now: if the loop runs dry before the scheduled exit, the process still exits with it.
     setExitCode(code);
-    // Exit waits for the kills: on Windows taskkill is a separate process, and exiting first left
+    // Exit waits for the kills: on Windows taskkill is a separate process, and exiting first leaves
     // the launcher and agent running (measured). Each stop bounds itself. The exit is scheduled onto
     // a clean loop turn, off the settlement stack.
     const leave = () => schedule(() => exit(exitCode));

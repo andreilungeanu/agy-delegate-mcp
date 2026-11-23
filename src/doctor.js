@@ -53,7 +53,6 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
   if (signal?.aborted) return notRun(aborted.error);
   let probe;
   try {
-    // Found before the spawn: through cmd.exe a missing launcher still spawns and would read as found.
     probe = spawnChild(execCommand, execArgs, options, { stdio: ["ignore", "pipe", "pipe"] }, registry);
   } catch (err) {
     return notRun(err.message);
@@ -82,7 +81,7 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     child.stderr?.on("error", () => {});
     child.on("error", () => finish({ found: false, version: null }));
     child.on("close", (code) => {
-      // Closed, it needs no stop, and its pid may be reused.
+      // Closed: its pid may be reused, so no later stop may kill it.
       probe.release();
       if (abortRequested) return;
       const version = code === 0 ? stdout.trim() || null : null;
@@ -99,8 +98,6 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       finish({ found: true, version: null, error: `version probe timed out after ${timeoutMs}ms` });
     }, timeoutMs);
     timer.unref?.();
-    // A host interrupt ends the probe at once rather than at its timeout, and returns once its stop
-    // settled.
     onAbort = () => {
       // The timeout would otherwise still fire during the kill and return first.
       clearTimeout(timer);
