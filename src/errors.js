@@ -1,7 +1,7 @@
 /**
  * Every failure carries a `reason`, so a caller can tell "fix your arguments" from "retry" without
- * parsing prose. Errors off the wire also carry the agent's JSON-RPC `code`. Frozen, so a note goes
- * on a new error with the old one as its `cause`.
+ * parsing prose. Errors off the wire also carry the agent's JSON-RPC `code`. A note goes on a new
+ * error with the old one as its `cause`: a caught error may be frozen or a primitive.
  *
  * @typedef {Error & { reason?: string, code?: number }} DelegateError
  */
@@ -17,5 +17,5 @@ export function makeError(reason, message, { code, cause } = {}) {
   const err = new Error(message, cause === undefined ? undefined : { cause });
   if (reason !== undefined) err.reason = reason;
   if (code !== undefined) err.code = code;
-  return Object.freeze(err);
+  return err;
 }
