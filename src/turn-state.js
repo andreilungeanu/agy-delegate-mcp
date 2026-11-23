@@ -150,9 +150,11 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
       }
     },
 
-    // Reopens a call the bridge closed itself, for a steer agy then rejected.
+    // Reopens a call the bridge closed itself, for a steer agy then rejected. Text collected since
+    // goes with the open call, as it would have had the call stayed open.
     reopenTool(toolCallId) {
       state.finishedToolCalls.delete(toolCallId);
+      state.unfinishedToolText += state.text();
       state.updateToolStatus(toolCallId, "pending");
     },
 
