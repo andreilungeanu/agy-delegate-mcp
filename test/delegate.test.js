@@ -5,7 +5,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { z } from "zod";
@@ -208,7 +208,8 @@ test("a cancel while an attachment is read decides the delegation at once", asyn
   let reading;
   const held = new Promise((resolve) => { reading = resolve; });
   let release;
-  fsp.readFile = (...args) => { reading(); return new Promise((r) => { release = () => r(readFile(...args)); }); };
+  let released;
+  fsp.readFile = (...args) => { reading(); return new Promise((r) => { release = () => { released = readFile(...args); r(released); }; }); };
   syncBuiltinESMExports();
   const dir = mkdtempSync(path.join(tmpdir(), "agy-held-read-"));
   writeFileSync(path.join(dir, "shot.png"), Buffer.alloc(16));
@@ -230,6 +231,9 @@ test("a cancel while an attachment is read decides the delegation at once", asyn
     fsp.readFile = readFile;
     syncBuiltinESMExports();
     release?.();
+    // Windows does not delete a file the released read still holds open.
+    await released?.catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
