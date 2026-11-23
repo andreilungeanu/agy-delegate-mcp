@@ -194,10 +194,9 @@ test("a stop retries an attempt that missed the exit once, and the next stop kil
 test("callers join a stop in flight", async () => {
   let seen;
   const { entry, calls } = scripted(createChildRegistry(), [new Promise((r) => { seen = r; })]);
-  const first = entry.stop();
-  assert.equal(entry.stop(), first);
+  const stops = [entry.stop(), entry.stop()];
   seen(true);
-  assert.equal(await first, true);
+  assert.deepEqual(await Promise.all(stops), [true, true]);
   assert.equal(calls.attempts, 1);
 });
 
