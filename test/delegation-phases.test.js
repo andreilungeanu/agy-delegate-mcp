@@ -8,6 +8,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { AcpClient } from "../src/acp-client.js";
+import { isChildAlive } from "../src/proc.js";
 import { runDelegate } from "../src/delegate.js";
 import { buildServer } from "../src/server.js";
 import { mkdtemp } from "./fixtures/temp-dir.mjs";
@@ -131,6 +132,9 @@ class Agy {
 }
 
 let caseCount = 0;
+// Cases whose chatter reached the bridge before the task prompt went out, the only ones the 5c3ba7d
+// rule applies to.
+let chatterChecked = 0;
 async function runCase(c) {
   const baseline = timers();
   const agy = await Agy.listen();
@@ -149,6 +153,7 @@ async function runCase(c) {
         const env = { ...process.env, SCRIPTED_AGY_PORT: String(agy.port) };
         const bridge = new AcpClient({ cwd, spawnSpec: { command: process.execPath, args: [AGY], options: { shell: false, env } } });
         bridge.once("exit", () => bridgeExited());
+        o.bridge = bridge;
         // Orders the chatter's arrival against the task prompt going out, so a frame that crossed
         // the prompt on the wire is not mistaken for one sent before it.
         bridge.on("update", (u) => { if (u?.update?.content?.text === CHATTER) o.chatterAt ??= ++order; });
@@ -160,6 +165,8 @@ async function runCase(c) {
       backgroundSettleMs: 50, backgroundContinueMs: 5000, backgroundWaitMs: 10000,
     });
     run.then((value) => ({ value }), (error) => ({ error })).then((outcome) => {
+      // Read as the delegation returns: agy's socket closes a moment after its process exits.
+      o.agyExitedAtReturn = !isChildAlive(o.bridge?.child);
       o.server = outcome;
       o.serverSettledAt = Date.now();
       serverSettled();
@@ -378,9 +385,10 @@ function violations(c, o) {
   rule(!afterCancel.includes(SPEC), "agy receives no task prompt after a cancel during setup (be92164)");
   rule(afterCancel.every((text) => text === SPEC), `agy receives no steer after a cancel (6afbf10); after session/cancel agy got ${show(afterCancel)}`);
   if (o.chatterAt !== undefined && !(o.promptAt < o.chatterAt)) {
+    chatterChecked++;
     rule(!result.includes(CHATTER), `a frame agy sent while attachments were read stays out of the result (5c3ba7d); result ${show(result)}`);
   }
-  rule(o.agyExited, "agy has exited by the time the delegation returns (ed7de7b)");
+  rule(o.agyExitedAtReturn, "agy has exited by the time the delegation returns (ed7de7b)");
   rule(o.leftoverTimers <= 0, `the delegation leaves no timer running once it has returned (cea5ca0); ${o.leftoverTimers} left 1 s after`);
   const afterReturn = o.announced ? "not-running" : "not-found";
   // A session agy opened after the call returned registers a turn nothing will end.
@@ -504,5 +512,6 @@ test("every host event in every phase of a delegation keeps the delegation's rul
       if (found.length) assert.fail(found.join("\n"));
     });
   }
-  t.diagnostic(`${CASES.length} cases in ${Date.now() - started} ms`);
+  t.diagnostic(`${CASES.length} cases in ${Date.now() - started} ms, ${chatterChecked} with agy's chatter before the prompt`);
+  assert.ok(chatterChecked > 0, "no case had agy's chatter arrive before the task prompt, so the 5c3ba7d rule never ran");
 });
