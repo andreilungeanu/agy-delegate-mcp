@@ -166,7 +166,7 @@ export const doctorOutputShape = {
 export const delegateInputSchema = z.object({
   spec: z.string().trim().min(1, "spec must not be blank").describe("Task brief: goal, scope, fixed decisions quoted exactly, acceptance criteria. Sent as written. Point at files to read rather than pasting code, or attach them with contextFiles."),
   mode: z.enum(["agent", "plan", "ask"]).default("agent").describe("agent implements; plan writes a plan, returned as plan; ask answers. plan and ask are instructions to the agent, not limits."),
-  resumeSessionId: z.string().trim().optional().describe("Continue an existing agy session."),
+  resumeSessionId: z.string().trim().optional().describe("Continue an existing agy session. When delegate ran as an MCP task, its server-side task id works too."),
   workspace: z.string().trim().min(1, "workspace must not be blank").describe("The agent's working directory, not a limit. Smallest directory holding the task's files; with no such directory the project root is the floor. Must already exist; never create one for the call."),
   model: z.string().trim().min(1, "model must be a non-empty string").optional().describe("agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, agy's default runs (a resume keeps the model last set on the session) and effectiveModel names it. doctor deep:true lists every id."),
   // Open string: a model's levels are known only once it is selected, and are validated then.
@@ -320,8 +320,10 @@ export function buildServer({
       },
     },
     async (args, ctx) => {
+      // Claude Code tells the model a task's id and never its session id, even after a stop.
+      const resumeSessionId = tasks.get(args.resumeSessionId)?.sessionId ?? args.resumeSessionId;
       /** @param {Record<string, any>} [over] */
-      const run = (over) => runDelegateTool({ args, ctx, runDelegate, inFlight: flights, seenSessions, ...over });
+      const run = (over) => runDelegateTool({ args: { ...args, resumeSessionId }, ctx, runDelegate, inFlight: flights, seenSessions, ...over });
       if (!servesTasks || !listsTasks(ctx)) return run();
       return /** @type {any} */ (runAsTask({ run, signal: ctx?.mcpReq?.signal, notify: progressNotifier(ctx), store: tasks }));
     }

@@ -433,6 +433,23 @@ test("steer and cancel by task id reach only that task's run, and a finished tas
   }
 });
 
+test("a task's id resumes the session its run opened, after tasks/cancel stopped it", async () => {
+  const pids = [];
+  const stopped = realOver("escalation-stub.js", {}, pids);
+  const resumes = [];
+  const resumed = async (opts) => { resumes.push(opts.resumeSessionId); return { result: "ok", sessionId: opts.resumeSessionId, resumed: true }; };
+  const raw = await connectRaw({ runDelegate: (opts) => (opts.resumeSessionId ? resumed : stopped)(opts), tasks: createTaskStore() });
+  try {
+    const { result: task } = await raw.call().reply;
+    await raw.send("tasks/cancel", { taskId: task.taskId }).reply;
+    assert.ok(await waitUntil(() => !isAlive(pids[0])), "the agent must be stopped");
+    await raw.call({ resumeSessionId: task.taskId }, { tasks: false }).reply;
+    assert.deepEqual(resumes, ["sess-escalate"]);
+  } finally {
+    await raw.close();
+  }
+});
+
 test("a finished delegation does not evict a concurrent one holding the same session id", async () => {
   // A resume can race the turn it resumes, so two live delegations can share a session id.
   // The one that finishes first must not deregister the other — cancel then reported a
