@@ -2305,6 +2305,7 @@ test("every note the bridge adds reaches the caller, whatever agy's side threw",
     { at: "prompt", thrown: Object.freeze(new Error("boom")), notes: ["boom", "Resume with resumeSessionId sess-frozen"] },
     { at: "prompt", thrown: "a bare string", notes: ["a bare string", "Resume with resumeSessionId sess-frozen"] },
     { at: "newSession", thrown: Object.freeze(Object.assign(new Error("auth required"), { code: -32000 })), reason: "not-signed-in", code: -32000, notes: ["auth required", "agy is not signed in"] },
+    { at: "newSession", thrown: Object.assign(new Error("auth required"), { code: -32000, reason: "" }), reason: "not-signed-in", code: -32000, notes: ["agy is not signed in"] },
   ];
   for (const { at, thrown, exited = true, reason, code, notes } of cases) {
     await assert.rejects(

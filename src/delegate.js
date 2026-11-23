@@ -704,7 +704,7 @@ export async function runDelegate({
     }
     // A JSON-RPC code means agy rejected something (fix the arguments), not that the bridge broke
     // (retry). -32000 is ACP's auth_required, sent by agy from session/new when signed out.
-    const reason = err?.reason ?? (err?.code === -32000 ? "not-signed-in" : typeof err?.code === "number" ? "agent-error" : undefined);
+    const reason = err?.reason || (err?.code === -32000 ? "not-signed-in" : typeof err?.code === "number" ? "agent-error" : undefined);
     failure = { cause: err, reason, notes: [] };
     const { notes } = failure;
     if (!err?.reason && err?.code === -32000) notes.push(". agy is not signed in: run agy once in a terminal and sign in, then retry.");
