@@ -1518,7 +1518,7 @@ test("timeout error stays quiet about resume and title when neither applies", as
   );
 });
 
-test("aborted error carries the same forensics as a timeout", async () => {
+test("an aborted error names its resume id without the stall forensics", async () => {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), 150);
   await assert.rejects(
@@ -1533,9 +1533,7 @@ test("aborted error carries the same forensics as a timeout", async () => {
     }),
     (err) => {
       assert.equal(err.reason, "aborted");
-      assert.match(err.message, /titled this turn "Auth Refactor"/);
-      assert.match(err.message, /Resume with resumeSessionId sess-forensics/);
-      assert.doesNotMatch(err.message, /does not stream shell output/);
+      assert.equal(err.message, "delegation aborted by MCP host. Resume with resumeSessionId sess-forensics.");
       return true;
     }
   );

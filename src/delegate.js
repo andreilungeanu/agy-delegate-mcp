@@ -320,7 +320,7 @@ export async function runDelegate({
   // No await between here and the abort listener: addEventListener does not replay a past abort.
   // Thrown rather than supervisor.abort(), which before supervise() settles with nothing listening.
   if (signal?.aborted) {
-    throw makeError("aborted", "delegation aborted by MCP host");
+    throw makeError("aborted", "delegation aborted by MCP host.");
   }
   // Before the spawn: validating later costs a process, a handshake and a billed turn.
   assertWorkspace(workspace);
@@ -700,7 +700,8 @@ export async function runDelegate({
     const isTimeout = reason === "hard-cap" || reason === "idle-timeout";
     // A handshake timeout gets the forensics but not the long-command advice: no prompt was sent.
     const isStall = isTimeout || reason === "handshake-timeout";
-    if (isStall || reason === "aborted" || reason === "agent-exit") {
+    // Not on an abort: the SDK sends no response to a request its host cancelled.
+    if (isStall || reason === "agent-exit") {
       const age = fmtDuration(supervisor.msSinceActivity());
       notes.push(`\n\nLast ACP frame ${age} ago${state.lastToolLabel ? `; last tool call: ${state.lastToolLabel}` : ""}.`);
       if (state.sessionTitle) notes.push(` The agent titled this turn ${JSON.stringify(state.sessionTitle)}.`);
