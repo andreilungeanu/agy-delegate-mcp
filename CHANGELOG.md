@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-23
+
+### Fixed
+
+- The SessionStart hook writes npm's install output to stderr, which stays out of the session
+  context, and raises no DEP0190 warning on Node 24.
+- A long command is cut to 200 characters in a stall error and the unfinished-tool warning.
+- `doctor` reads agy's version through a launcher prefix in `ACP_AGENT_ARGS` (`cmd /c agy acp`),
+  not the wrapper's.
+- A server shutdown during `doctor`'s version probe stops the probe, on a second signal too.
+- On a 2025-era connection `doctor` reports the client that `initialize` declared, whatever
+  envelope keys a request carries.
+- A stop that rejects is retried. A frozen error is thrown as is, without the bridge's notes,
+  instead of a TypeError.
+- The Claude plugin declares its logo as `icon`, the field Anthropic's directory reads.
+
 ## [1.7.0] - 2026-11-23
 
 ### Added
