@@ -128,9 +128,9 @@ full brief. `protocolWarnings` says why the resume fell back.
 ## Clarifying questions
 
 When agy needs a decision it asks and ends the turn. A question asked through agy's question tool
-arrives in `questions`, with its options and agy's recommended one; a question asked in prose
-only is in `result`. Answer by resuming the **same session** with a free-text answer in `spec` —
-you are not limited to the options agy listed.
+arrives in `questions`, with its options and the one agy recommends, if any; a question asked in
+prose only is in `result`. Answer by resuming the **same session** with a free-text answer in
+`spec` — you are not limited to the options agy listed.
 
 ## Security
 
