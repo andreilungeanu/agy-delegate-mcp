@@ -24,8 +24,7 @@ const PHASES = {
   exited: {},
 };
 
-// What a refused prompt throws, and what a cancel rejects the setup call in flight with. A cancel
-// before the prompt keeps its own reason, which runDelegate returns as a cancelled result.
+// What a request the phase refuses throws; after a cancel before the prompt, with the cancel's reason.
 /** @param {WirePhase} phase */
 function wireClosed(phase) {
   return phase === "cancelled-in-setup"
@@ -220,10 +219,10 @@ export class AcpClient extends EventEmitter {
   }
   hasSteer() { return this._steers.length > 0; }
   takeSteer() { return this._steers.shift(); }
-  // Before the prompt the setup call in flight is all that still runs, so rejecting it unwinds
-  // setup rather than leaving it to finish against a cancelled delegation.
+  // Before the prompt nothing runs that agy could finish, so the supervisor ends the delegation at
+  // once, whatever setup is awaiting.
   cancel(sessionId) {
-    if (this._advance("cancel") === "cancelled-in-setup") this.peer?.rejectAllPending(wireClosed(this._phase));
+    if (this._advance("cancel") === "cancelled-in-setup") this.emit("cancelled-in-setup");
     this.peer.notify("session/cancel", { sessionId });
     return Promise.resolve();
   }

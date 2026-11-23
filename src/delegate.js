@@ -680,7 +680,6 @@ export async function runDelegate({
     return out;
   } catch (err) {
     // A cancel before the prompt is the outcome the caller asked for: there was no turn to fail.
-    // It unwound setup by rejecting the call in flight, so it is the error that got here.
     if (err?.reason === "cancelled-in-setup" && sessionId) {
       out = { result: "", sessionId, resultSource: "none", stopReason: "cancelled" };
       if (resumeSessionId && sessionId === resumeSessionId) out.resumed = true;

@@ -7,12 +7,15 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { z } from "zod";
 import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 import { runDelegate as rawRunDelegate, readUsage, executionSummary, RECENT_COMMANDS, OLDER_FAILED_COMMANDS } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 import { askingClientFactory } from "./fixtures/asking-client.js";
+
+const require = createRequire(import.meta.url);
 
 // Every result this suite produces is parsed against a strict copy of delegateOutputShape.
 // Nothing else checks it: the shape is not declared to hosts, so a field added here but
@@ -184,6 +187,38 @@ test("a cancel landing after setup's last reply sends no task prompt", async () 
   assert.equal(out.stopReason, "cancelled");
   assert.equal(out.result, "");
   assert.equal(out.resultSource, "none");
+});
+
+// The held read stands in for a slow disk, with no request in flight on the wire.
+test("a cancel while an attachment is read decides the delegation at once", async () => {
+  const fsp = require("node:fs/promises");
+  const readFile = fsp.readFile;
+  let reading;
+  const held = new Promise((resolve) => { reading = resolve; });
+  let release;
+  fsp.readFile = (...args) => { reading(); return new Promise((r) => { release = () => r(readFile(...args)); }); };
+  syncBuiltinESMExports();
+  const dir = mkdtempSync(path.join(tmpdir(), "agy-held-read-"));
+  writeFileSync(path.join(dir, "shot.png"), Buffer.alloc(16));
+  let client;
+  let sessionId;
+  try {
+    const run = runDelegate({
+      spec: "do the thing", workspace: dir, contextFiles: ["shot.png"],
+      onSessionReady: (id) => { sessionId = id; },
+      clientFactory: () => (client = fakeFactory()),
+    });
+    await held;
+    client.cancel(sessionId);
+    const out = await Promise.race([run, new Promise((r) => setTimeout(() => r("still reading"), 3000))]);
+    assert.notEqual(out, "still reading", "the delegation waited for the attachment read after the cancel");
+    assert.equal(out.stopReason, "cancelled");
+    assert.equal(out.result, "");
+  } finally {
+    fsp.readFile = readFile;
+    syncBuiltinESMExports();
+    release?.();
+  }
 });
 
 // Off the wire: the counts come from the session/prompt reply and the context from the
