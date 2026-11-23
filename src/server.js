@@ -8,7 +8,7 @@ import { z } from "zod";
 import { runDelegate as runDelegateDefault } from "./delegate.js";
 import { runDoctor as runDoctorDefault } from "./doctor.js";
 import { VERSION, readPackageVersion } from "./version.js";
-import { DETACHED } from "./proc.js";
+import { DETACHED, children } from "./proc.js";
 
 const ICON_BASE = `https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v${VERSION}/assets`;
 /** @type {Array<{ src: string, mimeType: string, sizes: string[], theme: "light" | "dark" }>} */
@@ -41,10 +41,6 @@ function unregisterInFlight(map, sessionId, handle) {
   handles.delete(handle);
   if (handles.size === 0) map.delete(sessionId);
 }
-// Delegations whose session has not opened yet (about 3.4 s after the spawn): a live agent that
-// inFlight cannot name. Shutdown walks this; cancel cannot, having no id to pass.
-const pendingDelegations = new Set();
-
 // Session ids seen by this process, kept after the turn so cancel can tell a finished session
 // (still resumable) from an unknown id. Bounded.
 const seenSessions = new Set();
@@ -192,12 +188,11 @@ export function steerSession(map, seen, sessionId, message) {
  *   args: any, ctx?: any,
  *   runDelegate: (opts: any) => Promise<any>,
  *   inFlight: Map<string, Set<any>>,
- *   pending?: Set<any>,
  *   seenSessions?: Set<string>,
  * }} deps
  * @returns {Promise<import("@modelcontextprotocol/server").CallToolResult>}
  */
-export async function runDelegateTool({ args, ctx, runDelegate, inFlight, pending = new Set(), seenSessions = new Set() }) {
+export async function runDelegateTool({ args, ctx, runDelegate, inFlight, seenSessions = new Set() }) {
   const { spec, mode, resumeSessionId, workspace, model, effort, contextFiles } = args;
 
   const progressToken = ctx?.mcpReq?._meta?.progressToken;
@@ -230,15 +225,9 @@ export async function runDelegateTool({ args, ctx, runDelegate, inFlight, pendin
       contextFiles,
       onProgress,
       signal: ctx?.mcpReq?.signal,
-      onClientReady: (client) => {
-        handle = { client, cancelRequested: false };
-        pending.add(handle);
-      },
       onSessionReady: (sessionId, client) => {
         capturedSessionId = sessionId;
-        // The same handle moves across, so a racing shutdown finds it on one side.
-        handle ??= { client, cancelRequested: false };
-        pending.delete(handle);
+        handle = { client, cancelRequested: false };
         registerInFlight(inFlight, sessionId, handle);
         rememberSession(seenSessions, sessionId);
         // Sent as the session opens, so a host that calls tools concurrently can cancel or steer
@@ -257,7 +246,6 @@ export async function runDelegateTool({ args, ctx, runDelegate, inFlight, pendin
     };
   } finally {
     // Only this delegation's handle; the id stays registered while another turn runs on it.
-    if (handle) pending.delete(handle);
     if (capturedSessionId) unregisterInFlight(inFlight, capturedSessionId, handle);
   }
 }
@@ -270,10 +258,9 @@ const sessionIdInput = z.string().trim().min(1).describe("From delegate's \"sess
  *   runDelegate?: (opts: any) => Promise<any>,
  *   runDoctor?: (opts: any) => Promise<any>,
  *   forceGraceMs?: number,
- *   pending?: Set<any>,
  * }} [opts]
  */
-export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDoctorInjected, forceGraceMs = 5000, pending = pendingDelegations } = {}) {
+export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDoctorInjected, forceGraceMs = 5000 } = {}) {
   const runDelegate = runDelegateInjected || runDelegateDefault;
   const runDoctor = runDoctorInjected || runDoctorDefault;
   const server = new McpServer(
@@ -295,7 +282,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         openWorldHint: true,
       },
     },
-    async (args, ctx) => runDelegateTool({ args, ctx, runDelegate, inFlight, pending, seenSessions })
+    async (args, ctx) => runDelegateTool({ args, ctx, runDelegate, inFlight, seenSessions })
   );
 
   server.registerTool(
@@ -407,19 +394,8 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       },
     },
     async ({ deep }, ctx) => {
-      // In pending while it runs, so shutdown stops doctor's processes too.
-      const handles = [];
-      try {
-        const out = await runDoctor({
-          deep,
-          signal: ctx?.mcpReq?.signal,
-          onClientReady: (client) => { const handle = { client }; handles.push(handle); pending.add(handle); },
-          getClientInfo: () => clientInfoOf(server, ctx),
-        });
-        return { content: [{ type: "text", text: JSON.stringify(out) }] };
-      } finally {
-        for (const handle of handles) pending.delete(handle);
-      }
+      const out = await runDoctor({ deep, signal: ctx?.mcpReq?.signal, getClientInfo: () => clientInfoOf(server, ctx) });
+      return { content: [{ type: "text", text: JSON.stringify(out) }] };
     }
   );
 
@@ -448,8 +424,8 @@ if (process.argv[1]) {
 }
 
 // Kill what is still running, then exit, on any way the host has of going away.
-export function installSignalCleanup(map, {
-  pending = new Set(),
+/** @param {import("./proc.js").ChildRegistry} [registry] */
+export function installSignalCleanup(registry = children, {
   exit = (code) => process.exit(code),
   setExitCode = (code) => { process.exitCode = code; },
   schedule = (fn) => setImmediate(fn),
@@ -459,8 +435,6 @@ export function installSignalCleanup(map, {
   let signalsSeen = 0;
   // The code shutdown exits with: a signal's, even when it follows the stdin EOF.
   let exitCode = 0;
-  // Every handle a stop went to, so a second signal still reaches one that has since unregistered.
-  const dispatched = new Set();
   const shutdown = (code, fromSignal = false) => {
     // Only a second signal skips the wait for the kills: a hangup closes stdin and sends SIGHUP,
     // in either order. The first stops may still be in their ps walk, so the groups are killed
@@ -469,36 +443,18 @@ export function installSignalCleanup(map, {
     if (shuttingDown) {
       if (fromSignal && signalsSeen === 1) { exitCode = code; setExitCode(code); }
       if (signalsSeen < 2) return undefined;
-      for (const handle of new Set([...dispatched, ...[...map.values()].flatMap((h) => [...h]), ...pending])) {
-        try { handle.client.killNow?.(); } catch {}
-      }
+      registry.killAllNow();
       return exit(code);
     }
     shuttingDown = true;
     exitCode = code;
     // Set now: if the loop runs dry before the scheduled exit, the process still exits with it.
     setExitCode(code);
-    const stops = [];
-    // A stop that did not see the exit is retried once, as the delegation does.
-    const stopOnce = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
-    const dispatch = (handle) => {
-      dispatched.add(handle);
-      try {
-        stops.push(stopOnce(handle).then((exited) => (exited === false ? stopOnce(handle) : exited)).then((exited) => {
-          // Its group is killed and its id may be reused: a second signal must not kill it again.
-          if (exited !== false) dispatched.delete(handle);
-          return exited;
-        }));
-      } catch {}
-    };
-    for (const handles of map.values()) for (const handle of handles) dispatch(handle);
-    // Delegations still in their handshake, with no session id yet.
-    for (const handle of pending) dispatch(handle);
     // Exit waits for the kills: on Windows taskkill is a separate process, and exiting first left
-    // the launcher and agent running (measured). stop() bounds itself. The exit is scheduled onto
+    // the launcher and agent running (measured). Each stop bounds itself. The exit is scheduled onto
     // a clean loop turn, off the settlement stack.
     const leave = () => schedule(() => exit(exitCode));
-    Promise.all(stops).then(leave, leave);
+    registry.stopAll().then(leave, leave);
   };
   // On POSIX each agent has its own process group, so a signal to this process does not reach it.
   // The handler replaces Node's default and must exit, not swallow the signal.
@@ -518,7 +474,7 @@ if (isMain) {
   if (argv.includes("--version") || argv.includes("-v")) {
     console.log(readPackageVersion());
   } else {
-    installSignalCleanup(inFlight, { pending: pendingDelegations });
+    installSignalCleanup();
     // One factory serves both protocol eras: a 2025-era initialize pins a legacy instance.
     serveStdio(() => buildServer());
   }

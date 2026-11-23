@@ -35,9 +35,9 @@ function envReport(name, fallback = null) {
  * Time-boxed: doctor runs when delegation is already broken, so it must survive a wedged launcher.
  * @param {{ command: string, args?: string[], options?: any }} spawnSpec
  * @param {number} [timeoutMs]
- * @param {{ signal?: AbortSignal, registry?: import("./proc.js").ChildRegistry, onSpawn?: (probe: { pid: number, stop: () => Promise<boolean>, killNow: () => void }) => void }} [opts]
+ * @param {{ signal?: AbortSignal, registry?: import("./proc.js").ChildRegistry }} [opts]
  */
-export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, { signal, registry = children, onSpawn } = {}) {
+export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, { signal, registry = children } = {}) {
   const { command, args, options } = spawnSpec;
   const launcher = String(command || "").replace(/^["']|["']$/g, "");
   const isJsScript = isJsLauncher(launcher);
@@ -81,7 +81,6 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     child.stderr?.on("data", () => {});
     child.stderr?.on("error", () => {});
     child.on("error", () => finish({ found: false, version: null }));
-    if (child.pid) onSpawn?.({ pid: child.pid, stop: () => probe.stop(), killNow: () => probe.killNow() });
     child.on("close", (code) => {
       // Closed, it needs no stop, and its pid may be reused.
       probe.release();
@@ -112,11 +111,9 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
   });
 }
 
-async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs, signal, onClientReady }) {
+async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs, signal }) {
   const workspaceDir = workspace || process.cwd();
   const client = clientFactory({ spawnSpec, cwd: workspaceDir });
-  // Handed out before the spawn, so shutdown can stop it.
-  onClientReady?.(client);
   let timer;
   let onAbort;
   try {
@@ -172,8 +169,6 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
 }
 
 /**
- * onClientReady receives each process doctor starts, the version probe and then the handshake
- * agent, so a server shutdown can stop it.
  * @param {{
  *   getClientInfo?: () => { capabilities?: any, version?: any, protocolVersion?: string },
  *   deep?: boolean,
@@ -184,7 +179,6 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
  *   versionTimeoutMs?: number,
  *   readVersion?: () => string,
  *   signal?: AbortSignal,
- *   onClientReady?: (client: any) => void,
  * }} [opts]
  */
 export async function runDoctor({
@@ -197,10 +191,9 @@ export async function runDoctor({
   versionTimeoutMs = VERSION_PROBE_TIMEOUT_MS,
   readVersion = readPackageVersion,
   signal,
-  onClientReady,
 } = {}) {
   const { capabilities, version, protocolVersion } = getClientInfo();
-  const agentProbe = await probeAgentVersion(spawnSpec, versionTimeoutMs, { signal, onSpawn: onClientReady });
+  const agentProbe = await probeAgentVersion(spawnSpec, versionTimeoutMs, { signal });
 
   /** @type {{ plugin: any, client: any, agent: any & { handshake?: any }, runtime: any, env: any }} */
   const out = {
@@ -247,7 +240,6 @@ export async function runDoctor({
       workspace,
       timeoutMs: handshakeTimeoutMs,
       signal,
-      onClientReady,
     });
   }
 

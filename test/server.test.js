@@ -10,7 +10,7 @@ import { InMemoryTransport, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, 
 import { Client } from "@modelcontextprotocol/client";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { AcpClient } from "../src/acp-client.js";
-import { isChildAlive } from "../src/proc.js";
+import { createChildRegistry, isChildAlive } from "../src/proc.js";
 import { runDelegate as realRunDelegate } from "../src/delegate.js";
 import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup, steerSession } from "../src/server.js";
 
@@ -19,13 +19,14 @@ import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup
 const payload = (res) => JSON.parse(res.content[0].text);
 
 // Real AcpClient over a stub subprocess, so force-kill exercises the actual treeKill path.
-function stubClientFactory(stubFile) {
+function stubClientFactory(stubFile, registry) {
   return () => new AcpClient({
     spawnSpec: {
       command: process.execPath,
       args: [fileURLToPath(new URL(`./fixtures/${stubFile}`, import.meta.url))],
       options: { shell: false },
     },
+    registry,
   });
 }
 
@@ -859,12 +860,9 @@ test("a session still being resumed outlives an equally old one that was seen on
 });
 
 test("a shutdown during the handshake still kills the agent it spawned", async () => {
-  // The agent process exists from client.start(); its session id arrives about 3.4s later. A
-  // host going away inside that window used to exit with the agent running and nothing holding
-  // it — it is registered by session id, and there is no session id yet. Real stub agent, real
-  // process, and the assertion is that the pid is gone.
+  // The agent process exists from client.start(); its session id arrives about 3.4s later.
   const inFlight = new Map();
-  const pending = new Set();
+  const registry = createChildRegistry();
   let child;
   const started = new Promise((resolve) => {
     // The stub answers nothing, so the delegation sits in initialize for the whole test.
@@ -881,25 +879,23 @@ test("a shutdown during the handshake still kills the agent it spawned", async (
       ...opts,
       handshakeMs: 30000,
       clientFactory: (o) => {
-        const client = stubClientFactory("handshake-hang-stub.js")(o);
+        const client = stubClientFactory("handshake-hang-stub.js", registry)(o);
         const start = client.start.bind(client);
         client.start = async () => { const r = await start(); child = client.child; return r; };
         return client;
       },
     }),
     inFlight,
-    pending,
   });
 
   await started;
   const pid = child.pid;
   assert.equal(inFlight.size, 0, "no session id yet, so the map cannot hold it");
-  assert.equal(pending.size, 1, "the handshake-stage delegation must still be reachable");
 
   const stdin = new EventEmitter();
   const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
-    installSignalCleanup(inFlight, { pending, exit: () => {}, setExitCode: () => {}, stdin });
+    installSignalCleanup(registry, { exit: () => {}, setExitCode: () => {}, stdin });
     stdin.emit("end");
     const deadline = Date.now() + 8000;
     const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -989,18 +985,18 @@ test("steer tool forwards the message to a running delegation and reports each s
 // A finished delegation keeps its handle registered while it waits out agy's graceful stop. A
 // shutdown in that window must kill the agent rather than join the grace.
 test("shutdown kills an agent that is in its graceful stop instead of waiting out the grace", async () => {
-  const client = stubClientFactory("close-ignoring-stub.js")();
+  const registry = createChildRegistry();
+  const client = stubClientFactory("close-ignoring-stub.js", registry)();
   await client.start();
   await client.initialize();
   await client.newSession(process.cwd());
-  const map = new Map([["sess-wedged", new Set([{ client }])]]);
   client.stop({ graceMs: 10000 });
   const stdin = new EventEmitter();
   let exitedAt;
   const before = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM"), SIGHUP: process.listeners("SIGHUP") };
   try {
     const started = Date.now();
-    installSignalCleanup(map, { exit: () => { exitedAt = Date.now(); }, stdin });
+    installSignalCleanup(registry, { exit: () => { exitedAt = Date.now(); }, stdin });
     stdin.emit("end");
     for (let i = 0; i < 200 && exitedAt === undefined; i++) await new Promise((r) => setTimeout(r, 25));
     assert.ok(exitedAt !== undefined, "shutdown never exited");
@@ -1056,25 +1052,19 @@ test("cancel after the turn has ended reports not-running, and force cuts agy's 
   }
 });
 
-test("the doctor tool registers each process it starts where shutdown looks, and passes the host's abort signal", async () => {
-  const pending = new Set();
+test("the doctor tool passes the host's abort signal", async () => {
   let seen;
-  const runDoctor = async ({ onClientReady, signal }) => {
-    // The version probe, then the handshake agent.
-    const started = [{ stop: () => true }, { stop: () => true }];
-    for (const client of started) onClientReady(client);
-    seen = { registered: started.every((client) => [...pending].some((h) => h.client === client)), signal };
+  const runDoctor = async ({ signal }) => {
+    seen = { signal };
     return { plugin: { version: "x" }, client: { name: null, version: null, capabilities: {} }, agent: { found: true, command: "agy", version: null }, runtime: { node: "", platform: "", arch: "", cwd: "", transport: "stdio" }, env: {} };
   };
-  const server = buildServer({ runDoctor, pending });
+  const server = buildServer({ runDoctor });
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "1.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     await client.callTool({ name: "doctor", arguments: { deep: true } });
-    assert.equal(seen.registered, true, "shutdown must be able to reach the probe and the agent");
     assert.ok(seen.signal instanceof AbortSignal);
-    assert.equal(pending.size, 0, "every handle leaves once doctor returns");
   } finally {
     await client.close();
   }
@@ -1173,15 +1163,17 @@ test("a second signal kills the agents before exiting", { skip: process.platform
   chmodSync(join(dir, "ps"), 0o755);
   const savedPath = process.env.PATH;
   process.env.PATH = `${dir}:${savedPath}`;
+  const registry = createChildRegistry();
   const client = new AcpClient({
     spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/silent-stub.js", import.meta.url))], options: { shell: false } },
+    registry,
   });
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
   const before = Object.fromEntries(signals.map((s) => [s, process.listeners(s)]));
   try {
     await client.start();
     const exited = [];
-    installSignalCleanup(new Map([["sess-1", new Set([{ client }])]]), { exit: (code) => exited.push(code), setExitCode: () => {}, stdin: new EventEmitter() });
+    installSignalCleanup(registry, { exit: (code) => exited.push(code), setExitCode: () => {}, stdin: new EventEmitter() });
     process.emit("SIGTERM");
     await new Promise((r) => setTimeout(r, 100));
     process.emit("SIGINT");

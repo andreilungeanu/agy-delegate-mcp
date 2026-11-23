@@ -6,9 +6,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { runDoctor as rawRunDoctor } from "../src/doctor.js";
+import { probeAgentVersion, runDoctor as rawRunDoctor } from "../src/doctor.js";
 import { AcpClient } from "../src/acp-client.js";
-import { isChildAlive } from "../src/proc.js";
+import { createChildRegistry, isChildAlive } from "../src/proc.js";
 import { doctorOutputShape, doctorAgentShape, doctorHandshakeShape } from "../src/server.js";
 import { VERSION } from "../src/version.js";
 
@@ -416,11 +416,10 @@ test("runDoctor deep:true lists agy's base model ids and reports the account tie
 });
 
 // doctor ran its handshake with no way in from the host: an interrupt left the agent to the
-// handshake timeout, and shutdown could not see it at all.
+// handshake timeout.
 test("runDoctor deep stops the agent at once when the host aborts", async () => {
   const controller = new AbortController();
   let client;
-  let readied;
   const started = Date.now();
   setTimeout(() => controller.abort(), 200);
   const out = await rawRunDoctor({
@@ -430,12 +429,10 @@ test("runDoctor deep stops the agent at once when the host aborts", async () => 
       ...opts,
       spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/handshake-hang-stub.js", import.meta.url))], options: { shell: false } },
     })),
-    onClientReady: (c) => { readied = c; },
   });
   assert.ok(Date.now() - started < 3000, `doctor took ${Date.now() - started} ms after the abort`);
   assert.equal(out.agent.handshake.ok, false);
   assert.match(out.agent.handshake.error, /aborted/);
-  assert.equal(readied, client, "the agent must be handed out so shutdown can reach it");
   assert.ok(!isChildAlive(client.child));
 });
 
@@ -519,27 +516,25 @@ test("an abort during the version probe returns once the probe process is gone",
   }
 });
 
-test("runDoctor hands its version probe to onClientReady, whose stop ends it", async () => {
+test("shutdown's stopAll ends a hung version probe, and a probe after it is not started", async () => {
   const pidFile = join(tmpdir(), `agy-probe-handle-${process.pid}-${Date.now()}`);
   const saved = process.env.AGY_TEST_PIDFILE;
   process.env.AGY_TEST_PIDFILE = pidFile;
-  const readied = [];
+  const registry = createChildRegistry();
+  const spec = { command: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)), args: [], options: { shell: false } };
   try {
-    const run = rawRunDoctor({
-      versionTimeoutMs: 10000,
-      spawnSpec: { command: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)), args: [], options: { shell: false } },
-      onClientReady: (probe) => readied.push(probe),
-    });
+    const run = probeAgentVersion(spec, 10000, { registry });
     const deadline = Date.now() + 5000;
     while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
     const pid = Number(readFileSync(pidFile, "utf8").trim());
-    assert.equal(readied.length, 1, "the probe must be handed out so shutdown can reach it");
-    assert.equal(readied[0].pid, pid);
-    assert.equal(await readied[0].stop(), true, "stop resolves once the probe has closed");
+    await registry.stopAll();
     let alive = true;
     try { process.kill(pid, 0); } catch { alive = false; }
-    assert.equal(alive, false, "the probe must be gone when stop resolves");
+    assert.equal(alive, false, "the probe must be gone when stopAll resolves");
     await run;
+    rmSync(pidFile, { force: true });
+    const late = await probeAgentVersion(spec, 10000, { registry });
+    assert.deepEqual(late, { found: true, version: null, error: "the server is shutting down, so no process was started" });
   } finally {
     if (saved === undefined) delete process.env.AGY_TEST_PIDFILE; else process.env.AGY_TEST_PIDFILE = saved;
     rmSync(pidFile, { force: true });

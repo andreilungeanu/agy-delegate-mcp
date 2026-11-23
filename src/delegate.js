@@ -301,7 +301,6 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   model?: string, effort?: string,
  *   contextFiles?: string[], clientFactory?: (opts: any) => any,
  *   idleMs?: number, handshakeMs?: number, hardCapMs?: number, timeoutMs?: number,
- *   onClientReady?: (client: any) => void,
  *   onSessionReady?: (sessionId: string, client: any) => void,
  *   onTurnEnd?: () => void,
  *   onProgress?: (message: string) => void,
@@ -313,7 +312,7 @@ export async function runDelegate({
   spec, mode = "agent", resumeSessionId, workspace,
   model, effort, contextFiles, clientFactory,
   idleMs, handshakeMs, hardCapMs, timeoutMs,
-  onClientReady, onSessionReady, onTurnEnd, onProgress, progressThrottleMs = 2000,
+  onSessionReady, onTurnEnd, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
   // Quiet after agy's closing usage_update before its continuation counts as over, and how long
@@ -342,8 +341,6 @@ export async function runDelegate({
 
   const make = clientFactory || ((opts) => new AcpClient(opts));
   const client = make({ cwd: workspace });
-  // Handed over before the spawn, so the caller can stop the agent from client.start() on.
-  onClientReady?.(client);
   const supervisor = new SessionSupervisor(client, { idleMs: turnIdleMs, handshakeMs: shakeMs, hardCapMs: capMs });
   const onAbort = () => supervisor.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -766,9 +763,9 @@ export async function runDelegate({
     try { supervisor.finish(); } catch {}
     // Awaited, so agy has exited when the caller gets the result, or a warning says the exit was not
     // seen; otherwise agy still holds the workspace as its cwd (deleting it fails with EBUSY on
-    // Windows). The handle stays registered meanwhile, so force cancel and shutdown can cut the grace
-    // short. Graceful after a completed turn, so agy closes its conversation database; a stall,
-    // abort or exit is killed at once.
+    // Windows). The handle stays registered meanwhile, so a force cancel can cut the grace short.
+    // Graceful after a completed turn, so agy closes its conversation database; a stall, abort or
+    // exit is killed at once.
     const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
     // A host abort during the close is still an abort: a force stop ends the grace and kills.
     const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };

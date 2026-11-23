@@ -101,7 +101,6 @@ function killGroupNow(child) {
  * @typedef {{
  *   child: any,
  *   stop: (opts?: { timeoutMs?: number }) => Promise<boolean>,
- *   killNow: () => void,
  *   release: () => void,
  * }} TrackedChild
  * @typedef {{ child?: any, kill: (timeoutMs: number) => Promise<boolean>, killNow: () => void }} ChildKill
@@ -109,10 +108,10 @@ function killGroupNow(child) {
  */
 
 // The processes still to stop. An entry leaves once a stop saw its exit, after the tree kill, or
-// when its owner releases it; until then a second signal's killNow reaches it.
+// when its owner releases it; until then a second signal reaches it.
 export function createChildRegistry() {
-  /** @type {Set<TrackedChild>} */
-  const live = new Set();
+  /** @type {Map<TrackedChild, ChildKill>} */
+  const live = new Map();
   let closed = false;
   return {
     /**
@@ -144,23 +143,22 @@ export function createChildRegistry() {
           });
           return stopping;
         },
-        // Never once a stop saw the exit: the pid may be reused by then.
-        killNow: () => { if (live.has(entry)) kill.killNow(); },
         // For a child that closed by itself. A stop under way keeps it until the stop settles.
         release: () => { if (!stopping) live.delete(entry); },
       };
-      live.add(entry);
+      live.set(entry, kill);
       return entry;
     },
     // Refuses every later spawn and resolves once every stop settled.
     stopAll() {
       closed = true;
-      return Promise.all([...live].map((entry) => entry.stop())).then(() => undefined);
+      return Promise.all([...live.keys()].map((entry) => entry.stop())).then(() => undefined);
     },
-    // For a second signal, which exits at once.
+    // For a second signal, which exits at once. A child whose stop saw its exit has left: its pid
+    // may be reused by then.
     killAllNow() {
       closed = true;
-      for (const entry of live) entry.killNow();
+      for (const kill of live.values()) kill.killNow();
     },
   };
 }

@@ -200,8 +200,6 @@ export class AcpClient extends EventEmitter {
     return Promise.resolve();
   }
 
-  killNow() { this._tracked?.killNow(); }
-
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 
   // Memoized while in flight and after a confirmed exit; a missed exit is not, so a later stop kills
