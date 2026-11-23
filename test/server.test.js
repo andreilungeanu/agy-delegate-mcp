@@ -411,6 +411,28 @@ test("a 2025-era request that lists the tasks extension in _meta still gets a pl
   }
 });
 
+test("steer and cancel by task id reach only that task's run, and a finished task's id reaches none", async () => {
+  const raw = await connectRaw({ runDelegate: realOver("fake-acp.js"), tasks: createTaskStore() });
+  const tool = async (name, args) => JSON.parse((await raw.send("tools/call", { name, arguments: args }).reply).result.content[0].text);
+  const status = async (taskId) => (await raw.send("tasks/get", { taskId }).reply).result.status;
+  try {
+    // Two agents, each opening its own sess-1: one session id, two runs.
+    const [a, b] = (await Promise.all([raw.call({ spec: "STEERABLE task" }).reply, raw.call({ spec: "STEERABLE task" }).reply])).map((r) => r.result);
+    assert.deepEqual(await tool("steer", { sessionId: a.taskId, message: "go left" }), { status: "steered", sessionId: "sess-1" });
+    const doneA = await waitForTask(raw, a.taskId);
+    assert.equal(JSON.parse(doneA.result.content[0].text).result, "STEERED: go left");
+    assert.equal(await status(b.taskId), "working");
+    assert.deepEqual(await tool("steer", { sessionId: a.taskId, message: "go right" }), { status: "not-running", sessionId: "sess-1" });
+    assert.deepEqual(await tool("cancel", { sessionId: a.taskId, force: true }), { status: "not-running", sessionId: "sess-1" });
+    assert.equal(await status(b.taskId), "working");
+    assert.deepEqual(await tool("cancel", { sessionId: b.taskId }), { status: "cancelled", sessionId: "sess-1" });
+    const doneB = await waitForTask(raw, b.taskId);
+    assert.equal(JSON.parse(doneB.result.content[0].text).cancelRequested, true);
+  } finally {
+    await raw.close();
+  }
+});
+
 test("a finished delegation does not evict a concurrent one holding the same session id", async () => {
   // A resume can race the turn it resumes, so two live delegations can share a session id.
   // The one that finishes first must not deregister the other — cancel then reported a

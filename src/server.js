@@ -174,7 +174,7 @@ export const delegateInputSchema = z.object({
   contextFiles: z.array(z.string()).optional().describe("Paths to attach instead of pasting contents into spec. Text becomes references the agent may open; images (png/jpg/gif/webp, <5MB) are sent inline. Relative paths resolve against workspace but are not limited to it. Skips are reported in protocolWarnings, never fatal."),
 });
 
-// Steers every turn running on the id, as cancel does: the caller named a session.
+// Steers every turn the map holds under the id, as cancel does: a session id names all of them.
 export function steerSession(map, seen, sessionId, message) {
   const handles = map.get(sessionId);
   if (!handles || handles.size === 0) return seen.has(sessionId) ? "not-running" : "not-found";
@@ -212,7 +212,7 @@ export function progressNotifier(ctx) {
  *   seenSessions?: Set<string>,
  *   signal?: AbortSignal,
  *   onProgress?: (message: string) => void,
- *   onPromptSent?: (sessionId: string) => void,
+ *   onPromptSent?: (sessionId: string, handle: any) => void,
  *   onTurnEnd?: () => void,
  * }} deps
  * @returns {Promise<import("@modelcontextprotocol/server").CallToolResult>}
@@ -237,7 +237,7 @@ export async function runDelegateTool({
       contextFiles,
       onProgress,
       signal,
-      onPromptSent,
+      onPromptSent: onPromptSent && ((sessionId) => onPromptSent(sessionId, handle)),
       onSessionReady: (sessionId, client) => {
         capturedSessionId = sessionId;
         handle = { client, cancelRequested: false };
@@ -267,7 +267,7 @@ export async function runDelegateTool({
 }
 
 // cancel and steer take the id delegate announces; a blank one is a malformed call, not a stale id.
-const sessionIdInput = z.string().trim().min(1).describe("From delegate's \"session ready: <id>\" progress notification or its result.");
+const sessionIdInput = z.string().trim().min(1).describe("From delegate's \"session ready: <id>\" progress notification or its result. When delegate runs as an MCP task, its server-side task id works too.");
 
 /**
  * @param {{
@@ -295,6 +295,15 @@ export function buildServer({
     }
   );
   if (servesTasks) registerTaskHandlers(server, tasks);
+  // A task id names its own run, which a later turn on the same session is not; a session id names
+  // every turn running on it.
+  /** @param {string} id */
+  const targetOf = (id) => {
+    const task = tasks.get(id);
+    if (!task?.sessionId) return { sessionId: id, handles: flights.get(id) };
+    const running = task.status === "working" && flights.get(task.sessionId)?.has(task.handle);
+    return { sessionId: task.sessionId, handles: new Set(running ? [task.handle] : []) };
+  };
 
   server.registerTool(
     "delegate",
@@ -335,8 +344,8 @@ export function buildServer({
         openWorldHint: false,
       },
     },
-    async ({ sessionId, force }) => {
-      const handles = flights.get(sessionId);
+    async ({ sessionId: id, force }) => {
+      const { sessionId, handles } = targetOf(id);
       if (!handles || handles.size === 0) {
         // A finished session is still resumable, unlike an unknown id.
         const known = seenSessions.has(sessionId);
@@ -351,7 +360,6 @@ export function buildServer({
         if (force) await Promise.all(ending.map(stopQuietly));
         return statusResult("not-running", sessionId);
       }
-      // Every turn running on the id: the caller named a session.
       for (const handle of live) handle.cancelRequested = true;
       await Promise.all(live.map((handle) => handle.client.cancel(sessionId).catch(() => {})));
       if (!force) {
@@ -404,7 +412,10 @@ export function buildServer({
         openWorldHint: true,
       },
     },
-    async ({ sessionId, message }) => statusResult(steerSession(flights, seenSessions, sessionId, message), sessionId)
+    async ({ sessionId: id, message }) => {
+      const { sessionId, handles } = targetOf(id);
+      return statusResult(steerSession(new Map([[sessionId, handles ?? new Set()]]), seenSessions, sessionId, message), sessionId);
+    }
   );
 
   server.registerTool(

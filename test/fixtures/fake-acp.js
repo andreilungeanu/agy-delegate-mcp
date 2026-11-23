@@ -189,6 +189,9 @@ rl.on("line", (line) => {
       if (held) return steerTurn(m);
       if (/STEERABLE/.test(p.prompt[0]?.text ?? "")) return holdTurn(m);
       return state.mode === "plan" ? planTurn(m) : agentTurn(m);
+    case "session/cancel":
+      if (held) { reply(held, { stopReason: "cancelled" }); held = null; }
+      return;
     case "session/close":
       return reply(m, {});
     default:
