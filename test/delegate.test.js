@@ -2300,24 +2300,32 @@ test("a stop that rejects is retried like one that did not see the exit", async 
   assert.ok(!out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
-// Frozen, and thrown before the session opens, so only the exit note tries to write to it.
-test("a failure whose message cannot be written still goes out when agy did not exit", async () => {
-  const boom = Object.freeze(new Error("boom"));
-  await assert.rejects(
-    () => runDelegate({
-      spec: "task", workspace: process.cwd(),
-      clientFactory: () => {
-        const client = stubClient("sess-frozen");
-        client.start = async () => { throw boom; };
-        client.stop = async () => false;
-        return client;
-      },
-    }),
-    (err) => {
-      assert.equal(err, boom, `${err?.name}: ${err?.message}`);
-      return true;
-    }
-  );
+// One case per note: the exit note (thrown before the session, stop sees no exit), the resume hint
+// (thrown once the session is open), and the reason and sign-in note (a JSON-RPC -32000).
+test("a frozen error goes out as the failure, whichever note the bridge would add to it", async () => {
+  const cases = {
+    "exit not seen": { at: "start", error: new Error("boom"), exited: false },
+    "session open": { at: "prompt", error: new Error("boom") },
+    "agent error code": { at: "newSession", error: Object.assign(new Error("auth required"), { code: -32000 }) },
+  };
+  for (const [name, { at, error, exited = true }] of Object.entries(cases)) {
+    const frozen = Object.freeze(error);
+    await assert.rejects(
+      () => runDelegate({
+        spec: "task", workspace: process.cwd(),
+        clientFactory: () => {
+          const client = stubClient("sess-frozen");
+          client[at] = async () => { throw frozen; };
+          client.stop = async () => exited;
+          return client;
+        },
+      }),
+      (err) => {
+        assert.equal(err, frozen, `${name}: ${err?.name}: ${err?.message}`);
+        return true;
+      }
+    );
+  }
 });
 
 // agy reopens a resumed session at its defaults (agy #1460, measured on 1.5.14), and every
