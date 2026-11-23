@@ -2279,6 +2279,27 @@ test("an agent that does not exit after the stop is retried and reported", async
   assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
+test("a stop that rejects is retried like one that did not see the exit", async () => {
+  let stops = 0;
+  const out = await runDelegate({
+    spec: "task", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient("sess-reject");
+      client.prompt = async () => {
+        client.emit("update", { update: msgChunk("ok") });
+        return { stopReason: "end_turn" };
+      };
+      client.stop = async () => {
+        if (++stops === 1) throw new Error("taskkill failed");
+        return true;
+      };
+      return client;
+    },
+  });
+  assert.equal(stops, 2, "the rejected stop must be retried");
+  assert.ok(!out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
+});
+
 // Frozen, and thrown before the session opens, so only the exit note tries to write to it.
 test("a failure whose message cannot be written still goes out when agy did not exit", async () => {
   const boom = Object.freeze(new Error("boom"));
