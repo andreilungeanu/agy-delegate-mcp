@@ -366,15 +366,20 @@ test("stop() is idempotent and reports the exit it observed", async () => {
 });
 
 // A real agent cannot swallow SIGKILL, so its exit is hidden, as a failed kill would leave it; the
-// pid is still killed. Resolves on the real exit.
+// pid is still killed. Resolves on the real exit, with a function that shows it.
 function withholdExit(child) {
+  const real = {};
   for (const field of ["exitCode", "signalCode"]) {
-    Object.defineProperty(child, field, { get: () => null, set: () => {}, configurable: true });
+    real[field] = child[field];
+    Object.defineProperty(child, field, { get: () => null, set: (value) => { real[field] = value; }, configurable: true });
   }
+  const reveal = () => {
+    for (const field of Object.keys(real)) Object.defineProperty(child, field, { value: real[field], writable: true, configurable: true });
+  };
   return new Promise((resolve) => {
     const emit = child.emit;
     child.emit = function (event, ...args) {
-      if (event === "exit") resolve(undefined);
+      if (event === "exit") resolve(reveal);
       if (event === "exit" || event === "close") return false;
       return emit.call(this, event, ...args);
     };
@@ -385,13 +390,9 @@ test("stop() retries teardown after a missed exit", async () => {
   const client = new AcpClient({ spawnSpec: silentStub() });
   await client.start();
   const reallyExited = withholdExit(client.child);
-  const first = client.stop({ timeoutMs: 25 });
-  assert.equal(await first, false, "an exit that never arrives is not observed");
-  assert.equal(client._stopping, null, "a missed exit must not stay memoized");
-  const second = client.stop({ timeoutMs: 25 });
-  assert.notEqual(second, first, "force-retry must dispatch a new teardown");
-  assert.equal(await second, false);
-  await reallyExited;
+  assert.equal(await client.stop({ timeoutMs: 25 }), false, "an exit that never arrives is not observed");
+  (await reallyExited)();
+  assert.equal(await client.stop(), true, "the missed exit stayed the answer, so the next stop did not look again");
 });
 
 // With the exit withheld, emitExit never runs either: nothing but stop() rejects session/prompt.
