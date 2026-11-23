@@ -430,12 +430,12 @@ export async function runDelegate({
         state.startTool(up.toolCallId, up.status, up.name ?? up.title);
         const label = String(up.title || up.kind || "tool");
         const path = up.locations?.[0]?.path;
-        // One line, for the progress note and the stall error (a command title keeps its newlines).
-        // agy's titles usually name the file, with forward slashes, so the path is appended only
-        // when the title lacks it.
+        // One line of at most 200 characters for progress and errors: a command's title is its whole
+        // command line, newlines included. agy's titles usually name the file, with forward slashes,
+        // so the path is appended only when the title lacks it.
         const slashed = (s) => String(s).replace(/\\/g, "/");
         const named = path && slashed(label).includes(slashed(path));
-        state.lastToolLabel = (label + (path && !named ? " — " + path : "")).replace(/\s+/g, " ").trim();
+        state.lastToolLabel = (label + (path && !named ? " — " + path : "")).replace(/\s+/g, " ").trim().slice(0, 200);
         if (up.toolCallId != null) state.toolLabels.set(up.toolCallId, state.lastToolLabel);
         try { onProgress?.(("running: " + state.lastToolLabel).slice(0, 200)); } catch {}
       } else {

@@ -2464,6 +2464,37 @@ test("the unfinished-tool warning names the open command, not a later question",
   assert.match(warning, /npm test/);
 });
 
+// agy's run_command title is the whole command line, here a 6 KB heredoc.
+test("a long command is cut to 200 characters in the stall error and the unfinished-tool warning", async () => {
+  const script = "python - <<'EOF'\n" + "print('x' * 80)\n".repeat(400) + "print('tail-marker')\nEOF";
+  const openCommand = (client) => client.emit("update", {
+    update: { sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", kind: "execute", title: script, status: "in_progress" },
+  });
+  await assert.rejects(
+    () => runDelegate({
+      spec: "hang", workspace: process.cwd(), handshakeMs: 10000, hardCapMs: 300, heartbeatMs: 0,
+      clientFactory: hangingFactory({ emit: openCommand }),
+    }),
+    (err) => {
+      const label = /last tool call: (.*?)\. Resume with/s.exec(err.message)?.[1];
+      assert.ok(label?.startsWith("python - <<'EOF' print("), err.message.slice(0, 300));
+      assert.ok(label.length <= 200, `label is ${label.length} chars`);
+      return true;
+    }
+  );
+  const out = await runDelegate({
+    spec: "run it", workspace: process.cwd(),
+    clientFactory: () => {
+      const client = stubClient("sess-long");
+      client.prompt = async () => { openCommand(client); return { stopReason: "refusal" }; };
+      return client;
+    },
+  });
+  const warning = (out.protocolWarnings ?? []).find((w) => /tool call still running/.test(w)) ?? "";
+  assert.match(warning, /python - <<'EOF' print\(/);
+  assert.doesNotMatch(warning, /tail-marker/);
+});
+
 // servedModel was read from the last config reply only, so an effort reply without the model entry
 // saved no model, and a later resume naming that model dropped the effort.
 test("an effort reply without the model entry still ties the remembered effort to the model", async () => {
