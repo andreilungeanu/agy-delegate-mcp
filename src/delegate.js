@@ -48,13 +48,6 @@ function fmtDuration(ms) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
 }
 
-// For the error going out: a frozen or primitive one takes no write, and a throw here would replace it.
-/** @param {any} err @param {{ reason?: string, note?: string }} [fields] */
-function annotate(err, { reason, note } = {}) {
-  if (reason !== undefined) { try { err.reason = reason; } catch {} }
-  if (note !== undefined) { try { err.message += note; } catch {} }
-}
-
 // A blank spec still costs a billed turn (agy replies "No prompt content provided").
 function assertSpec(spec) {
   if (typeof spec === "string" && spec.trim() === "") {
@@ -491,7 +484,8 @@ export async function runDelegate({
 
   let sessionId;
   let resumeError;
-  let failed;
+  /** @type {{ cause: any, reason?: string, notes: string[] } | undefined} */
+  let failure;
   /** @type {any} */
   let out;
   let servedModel;
@@ -708,50 +702,44 @@ export async function runDelegate({
       if (resumeError) out.protocolWarnings = [`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`];
       return out;
     }
-    failed = err;
     // A JSON-RPC code means agy rejected something (fix the arguments), not that the bridge broke
     // (retry). -32000 is ACP's auth_required, sent by agy from session/new when signed out.
-    if (!err?.reason && err?.code === -32000) {
-      annotate(err, { reason: "not-signed-in", note: ". agy is not signed in: run agy once in a terminal and sign in, then retry." });
-    }
-    if (!err?.reason && typeof err?.code === "number") annotate(err, { reason: "agent-error" });
+    const reason = err?.reason ?? (err?.code === -32000 ? "not-signed-in" : typeof err?.code === "number" ? "agent-error" : undefined);
+    failure = { cause: err, reason, notes: [] };
+    const { notes } = failure;
+    if (!err?.reason && err?.code === -32000) notes.push(". agy is not signed in: run agy once in a terminal and sign in, then retry.");
     // A bare duration cannot tell a wedged agent from a slow command, so name what was outstanding.
-    const isTimeout = err?.reason === "hard-cap" || err?.reason === "idle-timeout";
+    const isTimeout = reason === "hard-cap" || reason === "idle-timeout";
     // A handshake timeout gets the forensics but not the long-command advice: no prompt was sent.
-    const isStall = isTimeout || err?.reason === "handshake-timeout";
-    if (isStall || err?.reason === "aborted" || err?.reason === "agent-exit") {
+    const isStall = isTimeout || reason === "handshake-timeout";
+    if (isStall || reason === "aborted" || reason === "agent-exit") {
       const age = fmtDuration(supervisor.msSinceActivity());
-      annotate(err, { note: `\n\nLast ACP frame ${age} ago${state.lastToolLabel ? `; last tool call: ${state.lastToolLabel}` : ""}.` });
-      if (state.sessionTitle) annotate(err, { note: ` The agent titled this turn ${JSON.stringify(state.sessionTitle)}.` });
+      notes.push(`\n\nLast ACP frame ${age} ago${state.lastToolLabel ? `; last tool call: ${state.lastToolLabel}` : ""}.`);
+      if (state.sessionTitle) notes.push(` The agent titled this turn ${JSON.stringify(state.sessionTitle)}.`);
       const files = normalizeAgentReportedFiles([...state.touched], workspace);
-      if (files.length) annotate(err, { note: ` Files reported edited: ${files.join(", ")}.` });
+      if (files.length) notes.push(` Files reported edited: ${files.join(", ")}.`);
     }
     // Any failure after the session opens leaves a live session, unknown-model and effort included.
     if (resumeError) {
       // Otherwise the resume hint reads as continuing work that was never in context.
-      annotate(err, {
-        note: ` Note: resuming ${resumeSessionId} had already failed (${resumeError}),`
-          + ` so this ran as a fresh session and none of that earlier work was in context.`,
-      });
+      notes.push(` Note: resuming ${resumeSessionId} had already failed (${resumeError}),`
+        + ` so this ran as a fresh session and none of that earlier work was in context.`);
     }
-    if (sessionId) annotate(err, { note: ` Resume with resumeSessionId ${sessionId}.` });
+    if (sessionId) notes.push(` Resume with resumeSessionId ${sessionId}.`);
     if (isTimeout) {
       // Name the knob that fired: the hard cap does not govern an idle-timeout.
-      const knob = err.reason === "idle-timeout" ? "AGY_DELEGATE_IDLE_MS" : "AGY_DELEGATE_HARD_CAP_MS";
-      annotate(err, {
-        note: " agy does not stream shell output over ACP, so a long-running command emits"
-          + ` nothing until it exits. Split the command, run it in the background and poll, or raise ${knob}.`,
-      });
+      const knob = reason === "idle-timeout" ? "AGY_DELEGATE_IDLE_MS" : "AGY_DELEGATE_HARD_CAP_MS";
+      notes.push(" agy does not stream shell output over ACP, so a long-running command emits"
+        + ` nothing until it exits. Split the command, run it in the background and poll, or raise ${knob}.`);
     }
     // Opt-in: raw frames help only when debugging the bridge, and cost the caller context.
     const frames = transcriptFrames();
     if (frames > 0) {
       try {
         const transcript = client.getTranscript?.(frames);
-        if (transcript) annotate(err, { note: `\n\n--- recent ACP transcript (last ${frames} frames) ---\n` + transcript });
+        if (transcript) notes.push(`\n\n--- recent ACP transcript (last ${frames} frames) ---\n` + transcript);
       } catch {}
     }
-    throw err;
   } finally {
     // The turn is decided; what follows is teardown. The server stops treating a cancel as aimed
     // at a running turn.
@@ -763,7 +751,7 @@ export async function runDelegate({
     try { supervisor.finish(); } catch {}
     // Graceful after a completed turn, so agy closes its conversation database; a stall, abort or
     // exit is killed at once.
-    const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failed?.reason);
+    const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failure?.reason);
     // A host abort during the close is still an abort: a force stop ends the grace and kills.
     const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };
     signal?.addEventListener("abort", abortClose, { once: true });
@@ -777,8 +765,11 @@ export async function runDelegate({
       const pid = client.child?.pid;
       const note = `the bridge stopped agy${pid ? ` (pid ${pid})` : ""} but did not see agy exit; it may still be running.`;
       // The result or the error is already decided; the note rides on whichever is going out.
-      if (failed) annotate(failed, { note: ` Note: ${note}` });
+      if (failure) failure.notes.push(` Note: ${note}`);
       else if (out) (out.protocolWarnings ??= []).push(note);
     }
   }
+  // Built once teardown has added its note: the caught error, agy's or a frozen one, is never written to.
+  const { cause, reason, notes } = failure;
+  throw makeError(reason, (cause?.message || String(cause)) + notes.join(""), { code: cause?.code, cause });
 }

@@ -6,13 +6,15 @@
  */
 
 /**
- * @param {string} reason
+ * @param {string | undefined} reason
  * @param {string} message
+ * @param {{ code?: number, cause?: unknown }} [extra]
  * @returns {DelegateError}
  */
-export function makeError(reason, message) {
+export function makeError(reason, message, { code, cause } = {}) {
   /** @type {DelegateError} */
-  const err = new Error(message);
-  err.reason = reason;
+  const err = new Error(message, cause === undefined ? undefined : { cause });
+  if (reason !== undefined) err.reason = reason;
+  if (code !== undefined) err.code = code;
   return err;
 }

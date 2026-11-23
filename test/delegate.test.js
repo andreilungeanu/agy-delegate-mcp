@@ -2299,26 +2299,28 @@ test("a stop that rejects is reported like one that did not see the exit", async
 
 // One case per note: the exit note (thrown before the session, stop sees no exit), the resume hint
 // (thrown once the session is open), and the reason and sign-in note (a JSON-RPC -32000).
-test("a frozen error goes out as the failure, whichever note the bridge would add to it", async () => {
-  const cases = {
-    "exit not seen": { at: "start", error: new Error("boom"), exited: false },
-    "session open": { at: "prompt", error: new Error("boom") },
-    "agent error code": { at: "newSession", error: Object.assign(new Error("auth required"), { code: -32000 }) },
-  };
-  for (const [name, { at, error, exited = true }] of Object.entries(cases)) {
-    const frozen = Object.freeze(error);
+test("every note the bridge adds reaches the caller, whatever agy's side threw", async () => {
+  const cases = [
+    { at: "start", thrown: Object.freeze(new Error("boom")), exited: false, notes: ["boom", "did not see agy exit"] },
+    { at: "prompt", thrown: Object.freeze(new Error("boom")), notes: ["boom", "Resume with resumeSessionId sess-frozen"] },
+    { at: "prompt", thrown: "a bare string", notes: ["a bare string", "Resume with resumeSessionId sess-frozen"] },
+    { at: "newSession", thrown: Object.freeze(Object.assign(new Error("auth required"), { code: -32000 })), reason: "not-signed-in", code: -32000, notes: ["auth required", "agy is not signed in"] },
+  ];
+  for (const { at, thrown, exited = true, reason, code, notes } of cases) {
     await assert.rejects(
       () => runDelegate({
         spec: "task", workspace: process.cwd(),
         clientFactory: () => {
           const client = stubClient("sess-frozen");
-          client[at] = async () => { throw frozen; };
+          client[at] = async () => { throw thrown; };
           client.stop = async () => exited;
           return client;
         },
       }),
       (err) => {
-        assert.equal(err, frozen, `${name}: ${err?.name}: ${err?.message}`);
+        assert.equal(err.reason, reason, `${at}: ${err?.message}`);
+        assert.equal(err.code, code);
+        for (const note of notes) assert.ok(err.message.includes(note), `${at}: "${note}" missing from: ${err.message}`);
         return true;
       }
     );
