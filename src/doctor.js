@@ -1,16 +1,14 @@
 import process from "node:process";
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
-import { commandExists, resolveAcpSpawn, spawnArgv, spawnCommandLine } from "./spawn.js";
-import { DETACHED, isChildAlive, treeKill } from "./proc.js";
+import { commandExists, resolveAcpSpawn } from "./spawn.js";
+import { children, spawnChild } from "./proc.js";
 import { readPackageVersion } from "./version.js";
 import { allowedValues, describeOptions } from "./model-options.js";
 
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const PROBE_STDOUT_CAP = 64 * 1024;
-const PROBE_KILL_WAIT_MS = 2000;
 const DEFAULT_LOG_SIZE = "2000";
 
 function formatArg(value) {
@@ -37,9 +35,9 @@ function envReport(name, fallback = null) {
  * Time-boxed: doctor runs when delegation is already broken, so it must survive a wedged launcher.
  * @param {{ command: string, args?: string[], options?: any }} spawnSpec
  * @param {number} [timeoutMs]
- * @param {{ signal?: AbortSignal, onSpawn?: (probe: { pid: number, stop: () => Promise<boolean>, killNow: () => void }) => void }} [opts]
+ * @param {{ signal?: AbortSignal, registry?: import("./proc.js").ChildRegistry, onSpawn?: (probe: { pid: number, stop: () => Promise<boolean>, killNow: () => void }) => void }} [opts]
  */
-export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, { signal, onSpawn } = {}) {
+export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, { signal, registry = children, onSpawn } = {}) {
   const { command, args, options } = spawnSpec;
   const launcher = String(command || "").replace(/^["']|["']$/g, "");
   const isJsScript = isJsLauncher(launcher);
@@ -49,14 +47,19 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
   const acpAt = Array.isArray(args) ? args.indexOf("acp") : -1;
   const versionArgs = [...(acpAt > 0 ? args.slice(0, acpAt) : []), "--version"];
   const execArgs = isJsScript ? [launcher, ...versionArgs] : versionArgs;
-  // Found before the spawn: through cmd.exe a missing launcher still spawns and would read as found.
-  const launch = spawnArgv(execCommand, execArgs, options);
-  if (!launch) return Promise.resolve({ found: false, version: null });
   const aborted = { version: null, error: "version probe aborted by MCP host" };
-  // Interrupted already: nothing is spawned, and found comes from the lookup alone.
-  if (signal?.aborted) {
-    return Promise.resolve({ found: isJsScript ? existsSync(launcher) : commandExists(launcher, options?.env), ...aborted });
+  // Interrupted already, or shutting down: nothing is spawned, and found comes from the lookup alone.
+  const notRun = (error) => Promise.resolve({ found: isJsScript ? existsSync(launcher) : commandExists(launcher, options?.env), version: null, error });
+  if (signal?.aborted) return notRun(aborted.error);
+  let probe;
+  try {
+    // Found before the spawn: through cmd.exe a missing launcher still spawns and would read as found.
+    probe = spawnChild(execCommand, execArgs, options, { stdio: ["ignore", "pipe", "pipe"] }, registry);
+  } catch (err) {
+    return notRun(err.message);
   }
+  if (!probe) return Promise.resolve({ found: false, version: null });
+  const { child } = probe;
   return new Promise((resolve) => {
     let settled = false;
     let stdout = "";
@@ -70,8 +73,6 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       if (onAbort) signal?.removeEventListener("abort", onAbort);
       resolve(result);
     };
-    const [file, argv] = spawnCommandLine(launch.command, launch.args, launch.options);
-    const child = spawn(file, argv, { ...launch.options, detached: DETACHED, stdio: ["ignore", "pipe", "pipe"] });
     // Capped: a version is one line.
     child.stdout?.on("data", (chunk) => {
       if (stdout.length < PROBE_STDOUT_CAP) stdout += chunk.toString();
@@ -80,25 +81,10 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     child.stderr?.on("data", () => {});
     child.stderr?.on("error", () => {});
     child.on("error", () => finish({ found: false, version: null }));
-    let open = true;
-    const closed = new Promise((r) => child.once("close", () => { open = false; r(undefined); }));
-    // True once the probe has closed, false when the kill wait ran out. A closed probe is left
-    // alone: shutdown can reach it later, after its pid is free for reuse.
-    const stop = () => {
-      if (!open) return Promise.resolve(true);
-      const killed = treeKill(child.pid, { childAlive: isChildAlive(child) }).catch(() => {});
-      const bound = new Promise((r) => setTimeout(() => r(false), PROBE_KILL_WAIT_MS).unref?.());
-      return Promise.race([Promise.all([killed, closed]).then(() => true), bound]);
-    };
-    // For a shutdown's second signal, which exits at once: SIGKILL to the group and the probe, with
-    // no ps walk. POSIX only; on win32 the probe dies with the server.
-    const killNow = () => {
-      if (!open || process.platform === "win32") return;
-      try { process.kill(-child.pid, "SIGKILL"); } catch {}
-      if (isChildAlive(child)) { try { process.kill(child.pid, "SIGKILL"); } catch {} }
-    };
-    if (child.pid) onSpawn?.({ pid: child.pid, stop, killNow });
+    if (child.pid) onSpawn?.({ pid: child.pid, stop: () => probe.stop(), killNow: () => probe.killNow() });
     child.on("close", (code) => {
+      // Closed, it needs no stop, and its pid may be reused.
+      probe.release();
       if (abortRequested) return;
       const version = code === 0 ? stdout.trim() || null : null;
       finish({
@@ -108,18 +94,19 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       });
     });
     timer = setTimeout(() => {
-      // treeKill: on win32 a plain kill reaches only the launcher, not what a .cmd or .ps1 started.
-      if (child.pid) treeKill(child.pid).catch(() => {});
+      // Not awaited, so the timeout returns on time; the probe stays tracked until its stop settles.
+      probe.stop();
       // It spawned, so it is installed; it did not answer.
       finish({ found: true, version: null, error: `version probe timed out after ${timeoutMs}ms` });
     }, timeoutMs);
     timer.unref?.();
-    // A host interrupt ends the probe at once rather than at its timeout, and returns once it closed.
+    // A host interrupt ends the probe at once rather than at its timeout, and returns once its stop
+    // settled.
     onAbort = () => {
       // The timeout would otherwise still fire during the kill and return first.
       clearTimeout(timer);
       abortRequested = true;
-      stop().then(() => finish({ found: true, ...aborted }));
+      probe.stop().then(() => finish({ found: true, ...aborted }));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });

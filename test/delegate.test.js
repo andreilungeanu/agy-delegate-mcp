@@ -2261,7 +2261,7 @@ test("context ignores a usage_update addressed to another session", async () => 
 
 // stop() reports whether it saw the agent exit. Ignored, a surviving agent went unmentioned and,
 // with the handle dropped, unreachable through cancel.
-test("an agent that does not exit after the stop is retried and reported", async () => {
+test("an agent that does not exit after the stop is reported", async () => {
   let stops = 0;
   const out = await runDelegate({
     spec: "task", workspace: process.cwd(),
@@ -2275,11 +2275,11 @@ test("an agent that does not exit after the stop is retried and reported", async
       return client;
     },
   });
-  assert.equal(stops, 2, "the stop must be retried once as a kill");
+  assert.equal(stops, 1, "the stop retries its own kill");
   assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
-test("a stop that rejects is retried like one that did not see the exit", async () => {
+test("a stop that rejects is reported like one that did not see the exit", async () => {
   let stops = 0;
   const out = await runDelegate({
     spec: "task", workspace: process.cwd(),
@@ -2289,15 +2289,12 @@ test("a stop that rejects is retried like one that did not see the exit", async 
         client.emit("update", { update: msgChunk("ok") });
         return { stopReason: "end_turn" };
       };
-      client.stop = async () => {
-        if (++stops === 1) throw new Error("taskkill failed");
-        return true;
-      };
+      client.stop = async () => { stops++; throw new Error("taskkill failed"); };
       return client;
     },
   });
-  assert.equal(stops, 2, "the rejected stop must be retried");
-  assert.ok(!out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
+  assert.equal(stops, 1);
+  assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
 // One case per note: the exit note (thrown before the session, stop sees no exit), the resume hint

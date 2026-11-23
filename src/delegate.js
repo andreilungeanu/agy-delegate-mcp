@@ -774,12 +774,8 @@ export async function runDelegate({
     const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };
     signal?.addEventListener("abort", abortClose, { once: true });
     let exited = false;
-    try {
-      // A rejected stop counts as an exit not seen, so it is retried too.
-      exited = await Promise.resolve(client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS })).catch(() => false);
-      // A stop that did not see the exit is not memoized, so a second one dispatches a fresh kill.
-      if (exited === false) exited = await client.stop();
-    } catch {}
+    // A rejected stop counts as an exit not seen.
+    try { exited = await client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS }); } catch {}
     finally { signal?.removeEventListener("abort", abortClose); }
     if (exited === false) {
       const pid = client.child?.pid;

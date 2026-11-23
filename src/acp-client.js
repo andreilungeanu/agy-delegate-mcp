@@ -1,18 +1,13 @@
-import process from "node:process";
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
 import { JsonRpcPeer } from "./jsonrpc.js";
 import { createRequestRouter } from "./request-router.js";
-import { resolveAcpSpawn, spawnArgv, spawnCommandLine } from "./spawn.js";
-import { DETACHED, isChildAlive, treeKill } from "./proc.js";
+import { resolveAcpSpawn } from "./spawn.js";
+import { children, isChildAlive, spawnChild } from "./proc.js";
 import { VERSION } from "./version.js";
 import { makeError } from "./errors.js";
 
 const STDERR_CAP = 64 * 1024;
-// How long stop() waits for the exit and the tree kill; it elapses when the kill failed or the
-// tree walk is slow.
-const STOP_EXIT_TIMEOUT_MS = 2000;
 // How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
 export const GRACEFUL_STOP_MS = 2000;
 
@@ -25,10 +20,13 @@ export function stampSettlement(promise) {
 }
 
 export class AcpClient extends EventEmitter {
-  /** @param {{ spawnSpec?: any, cwd?: string }} [opts] */
-  constructor({ spawnSpec, cwd } = {}) {
+  /** @param {{ spawnSpec?: any, cwd?: string, registry?: import("./proc.js").ChildRegistry }} [opts] */
+  constructor({ spawnSpec, cwd, registry = children } = {}) {
     super();
     this.spawnSpec = spawnSpec || resolveAcpSpawn();
+    this.registry = registry;
+    /** @type {import("./proc.js").TrackedChild | null} */
+    this._tracked = null;
     // agy treats its process directory as part of the workspace: started elsewhere, it ran git
     // status there (measured, agy 1.5.14).
     this.cwd = cwd;
@@ -46,6 +44,8 @@ export class AcpClient extends EventEmitter {
     this._steers = [];
   }
 
+  get child() { return this._tracked?.child; }
+
   // The stderr tail an exit error quotes; not counted as activity. Kept as chunks and joined on
   // read, which is cheap for a noisy agent; the StringDecoder keeps split UTF-8 characters whole.
   get stderrBuffer() {
@@ -53,20 +53,19 @@ export class AcpClient extends EventEmitter {
     return joined.length > STDERR_CAP ? joined.slice(-STDERR_CAP) : joined;
   }
 
-  start() {
+  async start() {
     const { command, args, options } = this.spawnSpec;
     // Found before the spawn: through cmd.exe a missing launcher still spawns, and would read as an
     // agent crash.
-    const launch = spawnArgv(command, args, options);
-    if (!launch) {
-      return Promise.reject(makeError("spawn-failed", `Failed to spawn agent (${command}): not found on PATH. Install the Antigravity CLI (agy) and sign in by running agy once.`));
+    const tracked = spawnChild(command, args, options, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"] }, this.registry);
+    if (!tracked) {
+      throw makeError("spawn-failed", `Failed to spawn agent (${command}): not found on PATH. Install the Antigravity CLI (agy) and sign in by running agy once.`);
     }
+    this._tracked = tracked;
     this._stderrChunks = [];
     this._stderrLength = 0;
     const stderrDecoder = new StringDecoder("utf8");
     this._exitEmitted = false;
-    const [file, argv] = spawnCommandLine(launch.command, launch.args, launch.options);
-    this.child = spawn(file, argv, { ...launch.options, ...(this.cwd ? { cwd: this.cwd } : {}), detached: DETACHED, stdio: ["pipe", "pipe", "pipe"] });
     this.child.stderr.on("data", (chunk) => {
       const text = stderrDecoder.write(chunk);
       if (text) {
@@ -201,22 +200,16 @@ export class AcpClient extends EventEmitter {
     return Promise.resolve();
   }
 
-  // Last resort for a process about to exit: SIGKILL to the group and the agent, no ps walk. POSIX
-  // only; on win32 the kill is taskkill, which stop() runs.
-  killNow() {
-    const pid = this.child?.pid;
-    if (!pid || process.platform === "win32") return;
-    try { process.kill(-pid, "SIGKILL"); } catch {}
-    if (isChildAlive(this.child)) { try { process.kill(pid, "SIGKILL"); } catch {} }
-  }
+  killNow() { this._tracked?.killNow(); }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 
-  // Memoized while in flight and after a confirmed exit; a missed exit is not, so a retry kills
+  // Memoized while in flight and after a confirmed exit; a missed exit is not, so a later stop kills
   // again. graceMs > 0 first closes the sessions and stdin and waits that long: agy then exits 0 in
   // 200–400 ms with its database closed, where a kill leaves -shm and -wal files (measured, agy
-  // 1.5.14). The tree kill follows either way. A force stop ends a grace in progress.
-  stop({ timeoutMs = STOP_EXIT_TIMEOUT_MS, graceMs = 0 } = {}) {
+  // 1.5.14). The tracked child's stop follows either way. A force stop ends a grace in progress.
+  /** @param {{ timeoutMs?: number, graceMs?: number }} [opts] */
+  stop({ timeoutMs, graceMs = 0 } = {}) {
     if (this._stopping && graceMs <= 0) this._endGrace?.();
     if (!this._stopping) {
       this._stopping = this._teardown(timeoutMs, graceMs).then((observed) => {
@@ -255,29 +248,14 @@ export class AcpClient extends EventEmitter {
   }
 
   async _teardown(timeoutMs, graceMs = 0) {
-    const child = this.child;
-    if (!child?.pid) {
+    const tracked = this._tracked;
+    if (!tracked) {
       try { this.peer?.close(); } catch {}
       return true;
     }
+    const { child } = tracked;
     if (graceMs > 0 && isChildAlive(child)) await this._closeGracefully(child, graceMs);
-    const alive = isChildAlive(child);
-    // Subscribed before the kill, so an immediate exit is not missed.
-    const exited = alive
-      ? /** @type {Promise<boolean>} */ (new Promise((resolve) => child.once("exit", () => resolve(true))))
-      : Promise.resolve(true);
-    // Also for an exited child: on POSIX its commands can outlive it in its process group.
-    const killed = treeKill(child.pid, { childAlive: alive }).catch(() => {});
-    /** @type {NodeJS.Timeout | undefined} */
-    let timer;
-    const bounded = /** @type {Promise<boolean>} */ (new Promise((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
-    }));
-    const observed = await Promise.race([exited, bounded]);
-    // The tree kill too, on the same deadline: on POSIX it walks the tree with ps first, and an agent
-    // exiting meanwhile would resolve stop() before its commands were killed.
-    await Promise.race([killed, bounded]);
-    clearTimeout(timer);
+    const observed = await tracked.stop({ timeoutMs });
     // On an exit, emitExit rejects pending RPCs with stderr; rejecting here first would lose it.
     // Only an unobserved exit settles them here.
     if (!observed && !this._exitEmitted && isChildAlive(child)) {
