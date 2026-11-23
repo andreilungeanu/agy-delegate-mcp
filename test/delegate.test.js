@@ -2101,7 +2101,7 @@ test("a cancel during the background wait does not blame the wait's limit", asyn
       };
       return client;
     },
-    onSessionReady: () => { setTimeout(() => { client.cancelRequested = true; }, 400); },
+    onSessionReady: () => { setTimeout(() => { client.phase = "cancelled"; }, 400); },
     backgroundWaitMs: 5000, backgroundSettleMs: 20, backgroundContinueMs: 5000,
   });
   assert.equal(out.stopReason, "cancelled");
@@ -2169,7 +2169,7 @@ test("a cancel that lands as the background wait runs out still cancels", async 
       client = stubClient("sess-bglast");
       client.prompt = async () => {
         client.emit("update", { update: { sessionUpdate: "tool_call", toolCallId: "c1", name: "run_command", title: "npm test", status: "in_progress" } });
-        client.cancelRequested = true;
+        client.phase = "cancelled";
         return { stopReason: "end_turn" };
       };
       return client;

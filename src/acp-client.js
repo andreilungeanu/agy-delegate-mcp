@@ -223,17 +223,13 @@ export class AcpClient extends EventEmitter {
   }
   hasSteer() { return this._steers.length > 0; }
   takeSteer() { return this._steers.shift(); }
-  // Read by the background wait: after a cancel agy closes the call without the usage_update that
-  // ends a continuation. Closes the steer window: a later steer would restart the cancelled turn.
-  // delegate listens for the event to end its setup when no prompt has gone out.
+  // Before the prompt the setup call in flight is all that still runs, so rejecting it unwinds
+  // setup rather than leaving it to finish against a cancelled delegation.
   cancel(sessionId) {
-    this._advance("cancel");
+    if (this._advance("cancel") === "cancelled-in-setup") this.peer?.rejectAllPending(wireClosed(this._phase));
     this.peer.notify("session/cancel", { sessionId });
-    this.emit("cancel");
     return Promise.resolve();
   }
-
-  get cancelRequested() { return this._phase === "cancelled" || this._phase === "cancelled-in-setup"; }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 

@@ -337,16 +337,6 @@ export async function runDelegate({
   const supervisor = new SessionSupervisor(client, { idleMs: turnIdleMs, handshakeMs: shakeMs, hardCapMs: capMs });
   const onAbort = () => supervisor.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
-  // A cancel before the prompt ends setup at once; setup checks cancelRequested between its calls.
-  let promptSent = false;
-  // The caller's cancel only: a supervisor trip (a deadline, an abort) cancels after settling.
-  let cancelledInSetupByCaller = false;
-  const onCancel = () => {
-    if (promptSent || supervisor.settled) return;
-    cancelledInSetupByCaller = true;
-    supervisor.cancelSetup();
-  };
-  client.on?.("cancel", onCancel);
   // agy takes the next prompt as its open question's answer, and can leave the call open. Closed as
   // the steer goes out, so its reply is the result, and kept per steer to reopen if agy rejects it.
   /** @type {any[][]} */
@@ -357,13 +347,13 @@ export async function runDelegate({
     closedBySteer.push(ids);
   };
   client.on?.("steer", onSteer);
-  const cancelledInSetup = { stopReason: "cancelled", replies: [], cancelledBeforePrompt: true };
 
   // The bridge cannot see inside a shell command, so silence is reported, not acted on.
   let promptInFlight = false;
   let heartbeat = null;
   const startHeartbeat = () => {
-    if (!(heartbeatMs > 0)) return;
+    // Setup orphaned by a trip must not arm a timer the teardown has already cleared.
+    if (!(heartbeatMs > 0) || supervisor.settled) return;
     const startedAt = Date.now();
     heartbeat = setInterval(() => {
       const parts = [
@@ -469,8 +459,9 @@ export async function runDelegate({
       backgroundWaited = Date.now() - startedAt;
       // The delegation already failed (agent exit, abort, hard cap): nobody reads this wait.
       if (supervisor.settled) return;
-      // Ahead of the deadline, so a cancel or steer in the last tick is not lost to it.
-      if (client.cancelRequested) return "cancelled";
+      // Ahead of the deadline, so a cancel or steer in the last tick is not lost to it. After a
+      // cancel agy closes the call without the usage_update that would end a continuation.
+      if (client.phase === "cancelled") return "cancelled";
       // A steer redirects the turn; its own prompt reply is what ends it now.
       if (client.hasSteer?.()) return;
       if (backgroundWaited >= backgroundWaitMs) { backgroundWaitRanOut = true; return; }
@@ -504,7 +495,6 @@ export async function runDelegate({
       // The options in force, replaced by each config reply. A resumed session opens at agy's
       // defaults (agy #1460), so model, effort and mode are compared and re-sent every time.
       let options = client.configOptions;
-      if (client.cancelRequested) return cancelledInSetup;
       // Only a resume that took inherits: a fallback to a fresh session is a different session.
       const earlier = resumeSessionId && sessionId === resumeSessionId ? sessionSettings.get(sessionId) : undefined;
       // The record lives in memory: a server restarted since the session ran has none to apply.
@@ -518,14 +508,12 @@ export async function runDelegate({
           options = optionsFrom(await client.setConfigOption(sessionId, "model", targetModel));
         }
       }
-      if (client.cancelRequested) return cancelledInSetup;
       // Kept across the effort reply, which may carry only the option it changed.
       const modelBeforeEffort = configOptionValue(options, "model");
       if (targetEffort !== undefined) {
         const target = targetModel ?? modelBeforeEffort ?? "the session's model";
         options = optionsFrom(await applyEffort(client, sessionId, target, targetEffort, options));
       }
-      if (client.cancelRequested) return cancelledInSetup;
       servedModel = configOptionValue(options, "model") ?? modelBeforeEffort;
       // Saved once agy accepted them, with the model agy reports, so an effort set on agy's default
       // is tied to that model. A session run on agy's defaults is recorded too, as having none, so
@@ -536,17 +524,13 @@ export async function runDelegate({
       // What agy reported in force, never the requested value.
       effectiveEffort = effortSettings(options);
       await client.setMode(sessionId, agyMode);
-      if (client.cancelRequested) return cancelledInSetup;
       state.reset();
       supervisor.promptStarted();
       startHeartbeat();
       try {
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
-        // A cancel that lands while attachments are read: the prompt is not sent.
-        if (client.cancelRequested) return cancelledInSetup;
         // Raised with the prompt, so frames sent while attachments were read are not folded in.
         promptInFlight = true;
-        promptSent = true;
         const first = client.sendTaskPrompt(
           sessionId,
           [{ type: "text", text: promptText }, ...blocks],
@@ -638,7 +622,7 @@ export async function runDelegate({
         "the agent ran a tool after its last message and never spoke again, so no final message closed the turn."
         + " result carries the last message before that tool call — it may be a preamble rather than the answer."
       );
-    } else if (!finalMessageAvailable && !res?.cancelledBeforePrompt) {
+    } else if (!finalMessageAvailable) {
       protocolWarnings.push("the agent ended the turn without emitting any message; result is empty.");
     }
     let stopReason;
@@ -696,8 +680,9 @@ export async function runDelegate({
     if (protocolWarnings.length) out.protocolWarnings = protocolWarnings;
     return out;
   } catch (err) {
-    // A caller's cancel before the prompt is a cancelled result, even if a config call then failed.
-    if (cancelledInSetupByCaller && sessionId) {
+    // A cancel before the prompt is the outcome the caller asked for: there was no turn to fail.
+    // It unwound setup by rejecting the call in flight, so it is the error that got here.
+    if (err?.reason === "cancelled-in-setup" && sessionId) {
       out = { result: "", sessionId, resultSource: "none", stopReason: "cancelled" };
       if (resumeSessionId && sessionId === resumeSessionId) out.resumed = true;
       if (resumeError) out.protocolWarnings = [`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`];
@@ -747,7 +732,6 @@ export async function runDelegate({
     try { onTurnEnd?.(); } catch {}
     clearInterval(heartbeat);
     signal?.removeEventListener("abort", onAbort);
-    client.off?.("cancel", onCancel);
     client.off?.("steer", onSteer);
     try { supervisor.finish(); } catch {}
     // Graceful after a completed turn, so agy closes its conversation database; a stall, abort or
