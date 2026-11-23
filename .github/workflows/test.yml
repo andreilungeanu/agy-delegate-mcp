@@ -51,9 +51,16 @@ jobs:
       # cannot run on this runner. Covering those means tests that assert nothing, so the floor
       # matches what is honestly reachable. Raise it when the ratio earns it, not by writing them.
       - name: Coverage floor
+        id: coverage
+        env:
+          # The runner copies every process's coverage file here, the unreadable one included.
+          NODE_V8_COVERAGE: ${{ runner.temp }}/v8-coverage
         run: >
           node scripts/run-tests.mjs --experimental-test-coverage --test-coverage-include='src/**'
           --test-coverage-lines=95 --test-coverage-branches=85 --test-coverage-functions=88
+      - name: Name unreadable coverage files
+        if: failure() && steps.coverage.outcome == 'failure'
+        run: node scripts/name-broken-coverage.mjs "$RUNNER_TEMP/v8-coverage"
       - name: Audit production dependencies
         timeout-minutes: 5
         env:
