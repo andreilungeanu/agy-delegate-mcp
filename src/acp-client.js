@@ -11,6 +11,21 @@ const STDERR_CAP = 64 * 1024;
 // How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
 export const GRACEFUL_STOP_MS = 2000;
 
+// The wire's phase, as one field: each phase lists the transitions it allows and the rest are
+// refused, so the order the phases run in is this table rather than the call order of several
+// flags. The agent's exit outranks every other transition, being a fact about the process.
+/** @typedef {"setup" | "running" | "cancelled-in-setup" | "cancelled" | "ended" | "exited"} WirePhase */
+/** @typedef {"prompt" | "cancel" | "end" | "exit"} WireTransition */
+/** @type {Record<WirePhase, Partial<Record<WireTransition, WirePhase>>>} */
+const PHASES = {
+  setup: { prompt: "running", cancel: "cancelled-in-setup", end: "ended", exit: "exited" },
+  running: { cancel: "cancelled", end: "ended", exit: "exited" },
+  "cancelled-in-setup": { exit: "exited" },
+  cancelled: { exit: "exited" },
+  ended: { exit: "exited" },
+  exited: {},
+};
+
 // Settlement order of prompt replies: a refused steer settles before the turn it targets, one agy
 // took over settles after it. Attached at request time, so it records when the reply came.
 let settleSeq = 0;
@@ -37,14 +52,22 @@ export class AcpClient extends EventEmitter {
     // Sessions opened on this process, which a graceful stop closes.
     /** @type {Set<string>} */
     this._sessions = new Set();
-    // setup until the prompt is on the wire, open while the turn runs, then closed for good.
-    /** @type {"setup" | "open" | "closed"} */
-    this._steerWindow = "setup";
+    /** @type {WirePhase} */
+    this._phase = "setup";
     /** @type {Promise<any>[]} */
     this._steers = [];
   }
 
   get child() { return this._tracked?.child; }
+
+  get phase() { return this._phase; }
+
+  /** @param {WireTransition} transition @returns {WirePhase | undefined} */
+  _advance(transition) {
+    const next = PHASES[this._phase][transition];
+    if (next) this._phase = next;
+    return next;
+  }
 
   // The stderr tail an exit error quotes; not counted as activity. Kept as chunks and joined on
   // read, which is cheap for a noisy agent; the StringDecoder keeps split UTF-8 characters whole.
@@ -63,7 +86,6 @@ export class AcpClient extends EventEmitter {
     this._stderrChunks = [];
     this._stderrLength = 0;
     const stderrDecoder = new StringDecoder("utf8");
-    this._exitEmitted = false;
     this.child.stderr.on("data", (chunk) => {
       const text = stderrDecoder.write(chunk);
       if (text) {
@@ -86,11 +108,9 @@ export class AcpClient extends EventEmitter {
     // until it closes. Unhandled, either takes down the server.
     this.child.stdin.on("error", () => {});
     this.child.stdout.on("error", () => {});
+    // Both 'exit' and 'close' land here; the transition the first one takes refuses the second.
     const emitExit = (code, signal) => {
-      if (this._exitEmitted) return;
-      this._exitEmitted = true;
-      // A steer to an exited agent has nowhere to go.
-      this._steerWindow = "closed";
+      if (!this._advance("exit")) return;
       const stderr = this.stderrBuffer;
       const err = makeError(
         "agent-exit",
@@ -169,16 +189,13 @@ export class AcpClient extends EventEmitter {
   // open only while the delegation's prompt runs, and a cancel or exit closes it for good. prefix
   // goes ahead of each steer, as ask mode's instruction goes ahead of the spec.
   acceptSteers(on, prefix) {
-    if (!on) { this._steerWindow = "closed"; return; }
-    if (this._steerWindow === "setup" && !this.cancelRequested && !this._exitEmitted) {
-      this._steerWindow = "open";
-      this._steerPrefix = prefix;
-    }
+    if (!on) { this._advance("end"); return; }
+    if (this._advance("prompt")) this._steerPrefix = prefix;
   }
   /** @returns {"steered" | "not-ready" | "not-running"} */
   steer(sessionId, text) {
-    if (this._steerWindow === "setup") return "not-ready";
-    if (this._steerWindow !== "open" || !this.peer) return "not-running";
+    if (this._phase === "setup") return "not-ready";
+    if (this._phase !== "running" || !this.peer) return "not-running";
     const body = this._steerPrefix ? `${this._steerPrefix}\n\n${text}` : text;
     // Stamped, so it never rejects unobserved.
     this._steers.push(stampSettlement(this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] })));
@@ -191,12 +208,13 @@ export class AcpClient extends EventEmitter {
   // ends a continuation. Closes the steer window: a later steer would restart the cancelled turn.
   // delegate listens for the event to end its setup when no prompt has gone out.
   cancel(sessionId) {
-    this.cancelRequested = true;
-    this._steerWindow = "closed";
+    this._advance("cancel");
     this.peer.notify("session/cancel", { sessionId });
     this.emit("cancel");
     return Promise.resolve();
   }
+
+  get cancelRequested() { return this._phase === "cancelled" || this._phase === "cancelled-in-setup"; }
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 
@@ -253,7 +271,7 @@ export class AcpClient extends EventEmitter {
     const observed = await tracked.stop({ timeoutMs });
     // On an exit, emitExit rejects pending RPCs with stderr; rejecting here first would lose it.
     // Only an unobserved exit settles them here.
-    if (!observed && !this._exitEmitted && isChildAlive(child)) {
+    if (!observed && this._phase !== "exited" && isChildAlive(child)) {
       try {
         this.peer?.rejectAllPending(makeError("agent-exit", "agent process did not exit after stop"));
       } catch {}
