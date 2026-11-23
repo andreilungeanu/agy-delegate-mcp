@@ -177,9 +177,13 @@ export class AcpClient extends EventEmitter {
   }
   // agy returns every session the account has, ignoring cwd, in one page.
   listSessions(params = {}) { return this.peer.request("session/list", params); }
-  setModel(sessionId, modelId) { return this.peer.request("session/set_model", { sessionId, modelId }); }
-  setConfigOption(sessionId, configId, value) { return this.peer.request("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
-  setMode(sessionId, modeId) { return this.peer.request("session/set_mode", { sessionId, modeId }); }
+  setModel(sessionId, modelId) { return this._setup("session/set_model", { sessionId, modelId }); }
+  setConfigOption(sessionId, configId, value) { return this._setup("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
+  setMode(sessionId, modeId) { return this._setup("session/set_mode", { sessionId, modeId }); }
+  _setup(method, params) {
+    if (this._phase !== "setup") throw wireClosed(this._phase);
+    return this.peer.request(method, params);
+  }
   get phase() { return this._phase; }
 
   /** @param {WireTransition} transition @returns {WirePhase | undefined} */

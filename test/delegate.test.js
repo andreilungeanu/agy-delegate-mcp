@@ -221,6 +221,26 @@ test("a cancel while an attachment is read decides the delegation at once", asyn
   }
 });
 
+test("a cancel before the first setup call keeps every setup call off the wire", async () => {
+  const sent = [];
+  const out = await runDelegate({
+    spec: "do the thing", workspace: process.cwd(), model: "gemini-4-neon",
+    onSessionReady: (id, client) => { client.cancel(id); },
+    clientFactory: () => {
+      const client = fakeFactory();
+      const start = client.start.bind(client);
+      client.start = async (...args) => {
+        await start(...args);
+        const request = client.peer.request.bind(client.peer);
+        client.peer.request = (method, params) => { sent.push(method); return request(method, params); };
+      };
+      return client;
+    },
+  });
+  assert.equal(out.stopReason, "cancelled");
+  assert.deepEqual(sent.filter((m) => /set_config_option|set_mode|prompt/.test(m)), []);
+});
+
 // Off the wire: the counts come from the session/prompt reply and the context from the
 // usage_update frame, the two places agy 1.5.14 reports them.
 test("runDelegate returns the turn's token usage and the session's context fill", async () => {
