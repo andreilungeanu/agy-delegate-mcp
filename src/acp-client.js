@@ -26,6 +26,16 @@ const PHASES = {
   exited: {},
 };
 
+// What a refused prompt throws, and what a cancel rejects the setup call in flight with. A cancel
+// before the prompt keeps its own reason: it is the outcome the caller asked for, and runDelegate
+// returns it as a cancelled result rather than a failure.
+/** @param {WirePhase} phase */
+function wireClosed(phase) {
+  return phase === "cancelled-in-setup"
+    ? makeError("cancelled-in-setup", "cancelled before the prompt was sent")
+    : makeError("wire-closed", `no prompt can go out: the wire is ${phase}`);
+}
+
 // Settlement order of prompt replies: a refused steer settles before the turn it targets, one agy
 // took over settles after it. Attached at request time, so it records when the reply came.
 let settleSeq = 0;
@@ -183,22 +193,31 @@ export class AcpClient extends EventEmitter {
   setModel(sessionId, modelId) { return this.peer.request("session/set_model", { sessionId, modelId }); }
   setConfigOption(sessionId, configId, value) { return this.peer.request("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
   setMode(sessionId, modeId) { return this.peer.request("session/set_mode", { sessionId, modeId }); }
-  prompt(sessionId, blocks) { return this.peer.request("session/prompt", { sessionId, prompt: blocks }); }
-  // agy takes a session/prompt sent mid-turn as a redirect: the prompt in flight settles at once
-  // with end_turn, the new one when the redirected turn ends (measured, agy 1.5.14). The window is
-  // open only while the delegation's prompt runs, and a cancel or exit closes it for good. prefix
-  // goes ahead of each steer, as ask mode's instruction goes ahead of the spec.
-  acceptSteers(on, prefix) {
-    if (!on) { this._advance("end"); return; }
-    if (this._advance("prompt")) this._steerPrefix = prefix;
+  // Every prompt on the wire goes through here, the task prompt and each steer alike.
+  prompt(sessionId, blocks) {
+    if (this._phase !== "setup" && this._phase !== "running") throw wireClosed(this._phase);
+    return this.peer.request("session/prompt", { sessionId, prompt: blocks });
   }
+  // The task prompt, and the only way into the running phase: the prompt goes on the wire and the
+  // steer window opens in this one synchronous call, so no caller can order them the other way.
+  // agy takes a session/prompt sent mid-turn as a redirect: the prompt in flight settles at once
+  // with end_turn, the new one when the redirected turn ends (measured, agy 1.5.14). steerPrefix
+  // goes ahead of each steer, as ask mode's instruction goes ahead of the spec.
+  /** @param {string} sessionId @param {any[]} blocks @param {{ steerPrefix?: string }} [opts] */
+  sendTaskPrompt(sessionId, blocks, { steerPrefix } = {}) {
+    if (!this._advance("prompt")) throw wireClosed(this._phase);
+    this._steerPrefix = steerPrefix;
+    return stampSettlement(this.prompt(sessionId, blocks));
+  }
+  // The turn is decided: agy's reply to a steer accepted from here on would reach nobody.
+  endTurn() { this._advance("end"); }
   /** @returns {"steered" | "not-ready" | "not-running"} */
   steer(sessionId, text) {
     if (this._phase === "setup") return "not-ready";
     if (this._phase !== "running" || !this.peer) return "not-running";
     const body = this._steerPrefix ? `${this._steerPrefix}\n\n${text}` : text;
     // Stamped, so it never rejects unobserved.
-    this._steers.push(stampSettlement(this.peer.request("session/prompt", { sessionId, prompt: [{ type: "text", text: body }] })));
+    this._steers.push(stampSettlement(this.prompt(sessionId, [{ type: "text", text: body }])));
     this.emit("steer");
     return "steered";
   }

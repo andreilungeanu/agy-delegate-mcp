@@ -28,7 +28,8 @@ export function askingClientFactory({ questions = ASKED, rejects = 0 } = {}) {
         update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Which file?" } });
         return { stopReason: "end_turn", usage };
       },
-      acceptSteers: (on) => { open = on; },
+      sendTaskPrompt: (sid, blocks) => { open = true; return stampSettlement(client.prompt(sid, blocks)); },
+      endTurn: () => { open = false; },
       hasSteer: () => steers.length > 0,
       takeSteer: () => steers.shift(),
       steer: () => {

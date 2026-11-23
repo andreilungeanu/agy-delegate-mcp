@@ -291,7 +291,7 @@ test("an agent that exits closes the steer window", async () => {
   await client.start();
   await client.initialize();
   const { sessionId } = await client.newSession(process.cwd());
-  client.acceptSteers(true);
+  client.sendTaskPrompt(sessionId, [{ type: "text", text: "do it" }]);
   const exited = new Promise((resolve) => client.once("exit", resolve));
   process.kill(client.child.pid);
   await exited;
@@ -299,9 +299,7 @@ test("an agent that exits closes the steer window", async () => {
   await client.stop();
 });
 
-// Collapsed into one flag, "not opened yet" and "closed for good" both read as not-ready, which
-// tells the caller to retry a turn that has already ended.
-test("steer reports not-ready before the window opens and not-running once it has closed", async () => {
+test("a cancelled wire refuses the task prompt, and steer goes not-ready then not-running", async () => {
   const client = new AcpClient({ spawnSpec: fakeSpawn() });
   await client.start();
   await client.initialize();
@@ -309,8 +307,11 @@ test("steer reports not-ready before the window opens and not-running once it ha
   assert.equal(client.steer(sessionId, "x"), "not-ready");
   client.cancel(sessionId);
   assert.equal(client.steer(sessionId, "x"), "not-running");
-  client.acceptSteers(true);
-  assert.equal(client.steer(sessionId, "x"), "not-running", "a cancelled window must not reopen");
+  assert.throws(
+    () => client.sendTaskPrompt(sessionId, [{ type: "text", text: "do it" }]),
+    (err) => err.reason === "cancelled-in-setup",
+  );
+  assert.equal(client.steer(sessionId, "x"), "not-running");
   await client.stop();
 });
 
@@ -323,7 +324,7 @@ test("a steer that goes out is announced, and a refused one is not", async () =>
     let announced = 0;
     client.on("steer", () => announced++);
     assert.equal(client.steer(sessionId, "x"), "not-ready");
-    client.acceptSteers(true);
+    client.sendTaskPrompt(sessionId, [{ type: "text", text: "do it" }]);
     assert.equal(client.steer(sessionId, "go left"), "steered");
     assert.equal(announced, 1);
   } finally {

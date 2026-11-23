@@ -5,7 +5,7 @@ import { statSync, realpathSync } from "node:fs";
 // Async: a sync read on the server's one thread stalls every other delegation. The statSync calls
 // below are pre-spawn argument validation and stay sync.
 import { readFile } from "node:fs/promises";
-import { AcpClient, GRACEFUL_STOP_MS, stampSettlement } from "./acp-client.js";
+import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
 import { DEFAULT_HARD_CAP_MS, SessionSupervisor } from "./session-supervisor.js";
 import { normalizeAgentReportedFiles } from "./agent-reported-files.js";
 import { makeTurnState } from "./turn-state.js";
@@ -547,10 +547,11 @@ export async function runDelegate({
         // Raised with the prompt, so frames sent while attachments were read are not folded in.
         promptInFlight = true;
         promptSent = true;
-        const first = stampSettlement(client.prompt(sessionId, [{ type: "text", text: promptText }, ...blocks]));
-        // Opened once the prompt is on the wire (request writes synchronously): a steer sent first
-        // makes agy read the brief as a redirect of it.
-        client.acceptSteers?.(true, mode === "ask" ? ASK_PREAMBLE : undefined);
+        const first = client.sendTaskPrompt(
+          sessionId,
+          [{ type: "text", text: promptText }, ...blocks],
+          { steerPrefix: mode === "ask" ? ASK_PREAMBLE : undefined },
+        );
         const settled = await first;
         let turn = settled.ok ? settled.value : undefined;
         let turnError = "error" in settled ? settled.error : undefined;
@@ -591,8 +592,8 @@ export async function runDelegate({
         if (turnError) throw turnError;
         return { ...turn, replies };
       } finally {
-        // Closed in the same tick as the last check above, so no steer lands unread.
-        client.acceptSteers?.(false);
+        // Ended in the same tick as the last check above, so no steer lands unread.
+        client.endTurn();
         // Cleared before the awaits below, so a frame trailing the settled turn is not folded in.
         promptInFlight = false;
       }

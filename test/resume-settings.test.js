@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import process from "node:process";
 import { EventEmitter } from "node:events";
 import { runDelegate } from "../src/delegate.js";
+import { stampSettlement } from "../src/acp-client.js";
 
 const DEFAULT_MODEL = "gemini-4-neon";
 const DEFAULT_LEVEL = "high";
@@ -48,6 +49,8 @@ function fakeAgy({ freshId, agySessions, effortReplyOmitsModel, sent }) {
       client.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ok" } } });
       return { stopReason: "end_turn" };
     };
+    client.sendTaskPrompt = (sid, blocks) => stampSettlement(client.prompt(sid, blocks));
+    client.endTurn = () => {};
     client.getTranscript = () => "";
     client.stop = async () => true;
     return client;

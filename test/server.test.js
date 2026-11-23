@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { InMemoryTransport, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY } from "@modelcontextprotocol/server";
 import { Client } from "@modelcontextprotocol/client";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import { AcpClient } from "../src/acp-client.js";
+import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { createChildRegistry, isChildAlive } from "../src/proc.js";
 import { runDelegate as realRunDelegate } from "../src/delegate.js";
 import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup } from "../src/server.js";
@@ -672,6 +672,8 @@ test("delegate tool returns a plan-mode artifact as plan end-to-end", async () =
       acp.emit("update", { update: { sessionUpdate: "agent_message_chunk", content: { text: "plan written" } } });
       return { stopReason: "end_turn" };
     };
+    acp.sendTaskPrompt = (sid, blocks) => stampSettlement(acp.prompt(sid, blocks));
+    acp.endTurn = () => {};
     acp.getTranscript = () => "";
     acp.stop = () => {};
     return acp;

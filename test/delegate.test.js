@@ -40,6 +40,9 @@ function stubClient(sessionId = "sess") {
   client.setConfigOption = async () => {};
   client.setMode = async () => {};
   client.prompt = async () => ({ stopReason: "end_turn" });
+  // The stubs script the turn by replacing prompt, so the task prompt is dispatched through it.
+  client.sendTaskPrompt = (sid, blocks) => stampSettlement(client.prompt(sid, blocks));
+  client.endTurn = () => {};
   client.getTranscript = () => "";
   client.stop = () => {};
   return client;
@@ -1968,7 +1971,9 @@ test("the background wait keeps one clock across a steered turn", async () => {
       const client = backgroundFactory({})();
       let open = false;
       const steers = [];
-      client.acceptSteers = (on) => { open = on; };
+      const send = client.sendTaskPrompt;
+      client.sendTaskPrompt = (...args) => { open = true; return send(...args); };
+      client.endTurn = () => { open = false; };
       client.hasSteer = () => steers.length > 0;
       client.takeSteer = () => steers.shift();
       client.steer = () => {
