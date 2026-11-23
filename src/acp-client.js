@@ -11,8 +11,7 @@ const STDERR_CAP = 64 * 1024;
 // How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
 export const GRACEFUL_STOP_MS = 2000;
 
-// The wire's phase, as one field: each phase lists the transitions it allows and refuses the rest,
-// so the order they run in is this table rather than the call order of several flags.
+// Each phase lists the transitions it allows; any other is refused.
 /** @typedef {"setup" | "running" | "cancelled-in-setup" | "cancelled" | "ended" | "exited"} WirePhase */
 /** @typedef {"prompt" | "cancel" | "end" | "exit"} WireTransition */
 /** @type {Record<WirePhase, Partial<Record<WireTransition, WirePhase>>>} */
@@ -26,8 +25,7 @@ const PHASES = {
 };
 
 // What a refused prompt throws, and what a cancel rejects the setup call in flight with. A cancel
-// before the prompt keeps its own reason: it is the outcome the caller asked for, and runDelegate
-// returns it as a cancelled result rather than a failure.
+// before the prompt keeps its own reason, which runDelegate returns as a cancelled result.
 /** @param {WirePhase} phase */
 function wireClosed(phase) {
   return phase === "cancelled-in-setup"
