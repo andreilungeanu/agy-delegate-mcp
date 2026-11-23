@@ -180,9 +180,11 @@ test("runDelegate returns assembled result for a fresh session", async () => {
 test("a cancel landing after setup's last reply sends no task prompt", async () => {
   const sent = [];
   let sessionId;
+  let promptSent = false;
   const out = await runDelegate({
     spec: "do the thing", workspace: process.cwd(),
     onSessionReady: (id) => { sessionId = id; },
+    onPromptSent: () => { promptSent = true; },
     clientFactory: () => {
       const client = tappedFactory((method, _params, send) => { sent.push(method); return send(); });
       const setMode = client.setMode.bind(client);
@@ -196,6 +198,7 @@ test("a cancel landing after setup's last reply sends no task prompt", async () 
   });
   assert.ok(sent.includes("session/set_mode"), sent.join());
   assert.ok(!sent.includes("session/prompt"), "the task prompt went out after the cancel");
+  assert.equal(promptSent, false);
   assert.equal(out.stopReason, "cancelled");
   assert.equal(out.result, "");
   assert.equal(out.resultSource, "none");
@@ -1671,6 +1674,30 @@ test("runDelegate rejects an unknown model before prompting and names agy's base
     }
   );
   assert.deepEqual(calls, []);
+});
+
+test("onPromptSent fires once with the session id, after the session opens and before the turn ends", async () => {
+  const events = [];
+  await runDelegate({
+    spec: "do the thing",
+    workspace: process.cwd(),
+    clientFactory: fakeFactory,
+    onSessionReady: (id) => events.push(`session ${id}`),
+    onPromptSent: (id) => events.push(`prompt ${id}`),
+    onTurnEnd: () => events.push("turn end"),
+  });
+  events.push("settled");
+  assert.deepEqual(events, ["session sess-1", "prompt sess-1", "turn end", "settled"]);
+});
+
+test("onPromptSent does not fire for a delegation whose model is rejected", async () => {
+  let sent = 0;
+  await assert.rejects(runDelegate({
+    spec: "task", model: "gemini-4-neon-high", workspace: process.cwd(),
+    clientFactory: modelOptionsFactory(undefined, { calls: [] }),
+    onPromptSent: () => { sent++; },
+  }), (err) => err.reason === "unknown-model");
+  assert.equal(sent, 0);
 });
 
 test("runDelegate skips the model round-trip when the session already runs that model", async () => {

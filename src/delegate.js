@@ -295,6 +295,7 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   contextFiles?: string[], clientFactory?: (opts: any) => any,
  *   idleMs?: number, handshakeMs?: number, hardCapMs?: number, timeoutMs?: number,
  *   onSessionReady?: (sessionId: string, client: any) => void,
+ *   onPromptSent?: (sessionId: string) => void,
  *   onTurnEnd?: () => void,
  *   onProgress?: (message: string) => void,
  *   progressThrottleMs?: number, heartbeatMs?: number, signal?: AbortSignal,
@@ -305,7 +306,7 @@ export async function runDelegate({
   spec, mode = "agent", resumeSessionId, workspace,
   model, effort, contextFiles, clientFactory,
   idleMs, handshakeMs, hardCapMs, timeoutMs,
-  onSessionReady, onTurnEnd, onProgress, progressThrottleMs = 2000,
+  onSessionReady, onPromptSent, onTurnEnd, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
   // Quiet after agy's closing usage_update before its continuation counts as over, and how long
@@ -531,11 +532,14 @@ export async function runDelegate({
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
         // Raised with the prompt, so frames sent while attachments were read are not folded in.
         promptInFlight = true;
-        const settled = await client.sendTaskPrompt(
+        const first = client.sendTaskPrompt(
           sessionId,
           [{ type: "text", text: promptText }, ...blocks],
           { steerPrefix: mode === "ask" ? ASK_PREAMBLE : undefined },
         );
+        // Every argument has been accepted and steers are open, so a caller may stop waiting.
+        try { onPromptSent?.(sessionId); } catch {}
+        const settled = await first;
         let turn = settled.ok ? settled.value : undefined;
         let turnError = "error" in settled ? settled.error : undefined;
         let turnSeq = settled.seq;
