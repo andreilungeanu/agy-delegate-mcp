@@ -23,17 +23,17 @@ if (complete) {
   process.exit(0);
 }
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const install = ["install", "--omit=dev", "--no-audit", "--no-fund"];
+const win32 = process.platform === "win32";
 try {
-  execFileSync(npm, ["install", "--omit=dev", "--no-audit", "--no-fund"], {
+  // On win32 one command line and no args array: Node 24 warns (DEP0190) on args under shell:true.
+  execFileSync(win32 ? ["npm.cmd", ...install].join(" ") : "npm", win32 ? [] : install, {
     cwd: root,
     // npm's stdout to stderr: Claude Code adds a SessionStart hook's stdout to the session context.
     stdio: ["ignore", 2, "inherit"],
-    // npm.cmd is a batch file, and Node refuses to spawn one without a shell — so the first
-    // session after a plugin install failed on Windows with `spawnSync npm.cmd EINVAL`, before
-    // doctor existed to report it. The argument list is fixed and carries no caller input, so
-    // the injection rule that keeps shell off elsewhere has nothing to bite on here.
-    shell: process.platform === "win32",
+    // npm.cmd is a batch file, which Node spawns only through a shell (EINVAL otherwise). The
+    // arguments are fixed, so the shell carries no caller input.
+    shell: win32,
   });
 } catch (err) {
   console.error(`agy-delegate-mcp: dependency install failed: ${err?.message || err}`);
