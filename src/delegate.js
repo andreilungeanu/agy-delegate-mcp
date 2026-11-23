@@ -769,7 +769,7 @@ export async function runDelegate({
       else if (out) (out.protocolWarnings ??= []).push(note);
     }
   }
-  // Built once teardown has added its note: the caught error, agy's or a frozen one, is never written to.
+  // After teardown, so the exit note it adds is in the message.
   const { cause, reason, notes } = failure;
   throw makeError(reason, (cause?.message || String(cause)) + notes.join(""), { code: cause?.code, cause });
 }
