@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
-import { runDelegate as rawRunDelegate, readUsage, RECENT_COMMANDS, OLDER_FAILED_COMMANDS } from "../src/delegate.js";
+import { runDelegate as rawRunDelegate, readUsage, executionSummary, RECENT_COMMANDS, OLDER_FAILED_COMMANDS } from "../src/delegate.js";
 import { delegateOutputShape } from "../src/server.js";
 import { askingClientFactory } from "./fixtures/asking-client.js";
 
@@ -404,6 +404,11 @@ const runCommand = (id, command, status = "in_progress", exitCode) => ({
 const readFileCall = (id, status) => ({
   sessionUpdate: status === "in_progress" ? "tool_call" : "tool_call_update", toolCallId: id, name: "read_file",
   kind: "read", status, title: "File a.js", rawInput: { Path: "a.js" },
+});
+
+test("execution counts a tool kind that names an Object property like any other", () => {
+  const summary = executionSummary(new Map([["t1", { kind: "constructor" }], ["t2", { kind: "__proto__" }], ["t3", { kind: "constructor" }]]));
+  assert.equal(JSON.stringify(summary.toolCalls), '{"constructor":2,"__proto__":1}');
 });
 
 test("execution keeps a finished command apart from a new one agy runs under the same id", async () => {

@@ -209,9 +209,9 @@ const commandFailed = (c) => (c.exitCode !== undefined && c.exitCode !== 0) || (
 export function executionSummary(records) {
   const calls = [...records.values()].filter((r) => !r.artifact);
   if (!calls.length) return undefined;
-  /** @type {Record<string, number>} */
-  const toolCalls = {};
-  for (const r of calls) toolCalls[r.kind || "other"] = (toolCalls[r.kind || "other"] ?? 0) + 1;
+  // A Map, so a kind such as "constructor" or "__proto__" is counted, not read off Object.
+  const kinds = new Map();
+  for (const r of calls) kinds.set(r.kind || "other", (kinds.get(r.kind || "other") ?? 0) + 1);
   // Keyed by the full text, so two commands sharing a truncated prefix stay apart. Re-inserting
   // moves a command to its last run.
   /** @type {Map<string, { runs: number, exitCode?: number, status?: string }>} */
@@ -233,7 +233,7 @@ export function executionSummary(records) {
     ...(c.runs > 1 ? { runs: c.runs } : {}),
   }));
   /** @type {{ toolCalls: Record<string, number>, commands?: any[], commandsOmitted?: number }} */
-  const out = { toolCalls };
+  const out = { toolCalls: Object.fromEntries(kinds) };
   if (listed.length) out.commands = listed;
   if (all.length > listed.length) out.commandsOmitted = all.length - listed.length;
   return out;
