@@ -27,7 +27,8 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 try {
   execFileSync(npm, ["install", "--omit=dev", "--no-audit", "--no-fund"], {
     cwd: root,
-    stdio: "inherit",
+    // npm's stdout to stderr: Claude Code adds a SessionStart hook's stdout to the session context.
+    stdio: ["ignore", 2, "inherit"],
     // npm.cmd is a batch file, and Node refuses to spawn one without a shell — so the first
     // session after a plugin install failed on Windows with `spawnSync npm.cmd EINVAL`, before
     // doctor existed to report it. The argument list is fixed and carries no caller input, so
