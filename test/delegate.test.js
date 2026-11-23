@@ -549,7 +549,7 @@ test("questions is reported alongside the warning for a background command still
 });
 
 test("a steer closes the question agy leaves open, so it is not returned", async () => {
-  const factory = askingClientFactory({ leavesOpen: true });
+  const factory = askingClientFactory();
   const out = await runDelegate({
     spec: "Rename the variable.", mode: "agent", workspace: process.cwd(),
     // The steer goes out while agy's question is open, before its turn ends.

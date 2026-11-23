@@ -1,5 +1,5 @@
-// A stub agy asking as agy 1.5.14 does: the ask_question call stays pending and the turn ends; the
-// next prompt completes it unless leavesOpen.
+// A stub agy asking as agy 1.5.14 does: the ask_question call stays pending and the turn ends. It
+// takes a steer as the answer and leaves the call open.
 import { EventEmitter } from "node:events";
 import { stampSettlement } from "../../src/acp-client.js";
 
@@ -8,7 +8,7 @@ const ASKED = [
   { is_multi_select: true, options: ["node b.js", "npm test"], question: "Which checks should run?" },
 ];
 
-export function askingClientFactory({ leavesOpen = false } = {}) {
+export function askingClientFactory() {
   return () => {
     const client = new EventEmitter();
     let open = false;
@@ -19,10 +19,7 @@ export function askingClientFactory({ leavesOpen = false } = {}) {
       start: async () => {},
       initialize: async () => {},
       newSession: async () => ({ sessionId: "sess-ask" }),
-      listSessions: async () => ({ sessions: [] }),
-      setConfigOption: async () => {},
       setMode: async () => {},
-      getTranscript: () => "",
       stop: async () => true,
       prompt: async () => {
         update({ sessionUpdate: "tool_call", toolCallId: "ask1", name: "ask_question", kind: "other", status: "in_progress", title: "Run ask_question", rawInput: { questions: ASKED } });
@@ -37,7 +34,6 @@ export function askingClientFactory({ leavesOpen = false } = {}) {
         if (!open) return "not-running";
         client.emit("steer");
         steers.push(stampSettlement((async () => {
-          if (!leavesOpen) update({ sessionUpdate: "tool_call_update", toolCallId: "ask1", name: "ask_question", status: "completed" });
           update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Renamed as answered." } });
           return { stopReason: "end_turn", usage };
         })()));
