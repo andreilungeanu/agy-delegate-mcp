@@ -24,6 +24,7 @@ Antigravity Delegate is the MCP bridge that lets Claude Code, ChatGPT/Codex, Cop
 
 - 🤝 **Native plugins** — install into Claude Code, ChatGPT/Codex, or GitHub Copilot CLI and say *"delegate this to Antigravity"*. The shared skill teaches your agent how to delegate well.
 - 💬 **No stalled runs** — if agy needs to clarify, it ends the turn and returns the question as a normal result. Your agent answers by resuming the same session.
+- ⏳ **Runs in the background in Claude Code** — in an interactive Claude Code CLI session, `delegate` runs as an MCP task: the call returns once agy has the prompt, and the result arrives as a task notification when agy finishes.
 - 📦 **Named results** — final answer, changed files, session id, model and thinking level, returned as one compact JSON payload.
 - 📋 **Plan first** — `plan` mode: agy writes a plan, returned in full as `plan`; you review it, then the same session implements it.
 - 🔍 **Ask anything** — `ask` mode: Q&A over your codebase.
