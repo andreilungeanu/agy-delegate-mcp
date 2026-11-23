@@ -407,18 +407,18 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       },
     },
     async ({ deep }, ctx) => {
-      // In pending while it runs, so shutdown stops doctor's agent too.
-      let handle;
+      // In pending while it runs, so shutdown stops doctor's processes too.
+      const handles = [];
       try {
         const out = await runDoctor({
           deep,
           signal: ctx?.mcpReq?.signal,
-          onClientReady: (client) => { handle = { client }; pending.add(handle); },
+          onClientReady: (client) => { const handle = { client }; handles.push(handle); pending.add(handle); },
           getClientInfo: () => clientInfoOf(server, ctx),
         });
         return { content: [{ type: "text", text: JSON.stringify(out) }] };
       } finally {
-        if (handle) pending.delete(handle);
+        for (const handle of handles) pending.delete(handle);
       }
     }
   );

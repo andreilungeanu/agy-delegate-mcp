@@ -506,6 +506,33 @@ test("an abort during the version probe returns once the probe process is gone",
   }
 });
 
+test("runDoctor hands its version probe to onClientReady, whose stop ends it", async () => {
+  const pidFile = join(tmpdir(), `agy-probe-handle-${process.pid}-${Date.now()}`);
+  const saved = process.env.AGY_TEST_PIDFILE;
+  process.env.AGY_TEST_PIDFILE = pidFile;
+  const readied = [];
+  try {
+    const run = rawRunDoctor({
+      versionTimeoutMs: 10000,
+      spawnSpec: { command: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)), args: [], options: { shell: false } },
+      onClientReady: (probe) => readied.push(probe),
+    });
+    const deadline = Date.now() + 5000;
+    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    assert.equal(readied.length, 1, "the probe must be handed out so shutdown can reach it");
+    assert.equal(readied[0].pid, pid);
+    assert.equal(await readied[0].stop(), true, "stop resolves once the probe has closed");
+    let alive = true;
+    try { process.kill(pid, 0); } catch { alive = false; }
+    assert.equal(alive, false, "the probe must be gone when stop resolves");
+    await run;
+  } finally {
+    if (saved === undefined) delete process.env.AGY_TEST_PIDFILE; else process.env.AGY_TEST_PIDFILE = saved;
+    rmSync(pidFile, { force: true });
+  }
+});
+
 test("runDoctor probes through cmd.exe with a launcher path holding spaces", { skip: process.platform !== "win32" && "cmd.exe quoting" }, async () => {
   const argvPath = fileURLToPath(new URL("./fixtures/version-argv.mjs", import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), "doctor launcher "));

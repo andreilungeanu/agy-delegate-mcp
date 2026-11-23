@@ -1203,13 +1203,14 @@ test("cancel after the turn has ended reports not-running, and force cuts agy's 
   }
 });
 
-test("the doctor tool registers its agent where shutdown looks, and passes the host's abort signal", async () => {
+test("the doctor tool registers each process it starts where shutdown looks, and passes the host's abort signal", async () => {
   const pending = new Set();
   let seen;
   const runDoctor = async ({ onClientReady, signal }) => {
-    const client = { stop: () => true };
-    onClientReady(client);
-    seen = { registered: [...pending].some((h) => h.client === client), signal };
+    // The version probe, then the handshake agent.
+    const started = [{ stop: () => true }, { stop: () => true }];
+    for (const client of started) onClientReady(client);
+    seen = { registered: started.every((client) => [...pending].some((h) => h.client === client)), signal };
     return { plugin: { version: "x" }, client: { name: null, version: null, capabilities: {} }, agent: { found: true, command: "agy", version: null }, runtime: { node: "", platform: "", arch: "", cwd: "", transport: "stdio" }, env: {} };
   };
   const server = buildServer({ runDoctor, pending });
@@ -1218,9 +1219,9 @@ test("the doctor tool registers its agent where shutdown looks, and passes the h
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     await client.callTool({ name: "doctor", arguments: { deep: true } });
-    assert.equal(seen.registered, true, "shutdown must be able to reach doctor's agent");
+    assert.equal(seen.registered, true, "shutdown must be able to reach the probe and the agent");
     assert.ok(seen.signal instanceof AbortSignal);
-    assert.equal(pending.size, 0, "the handle leaves once doctor returns");
+    assert.equal(pending.size, 0, "every handle leaves once doctor returns");
   } finally {
     await client.close();
   }

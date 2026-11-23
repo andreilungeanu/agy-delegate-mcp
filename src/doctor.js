@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
 import { commandExists, resolveAcpSpawn, spawnArgv, spawnCommandLine } from "./spawn.js";
-import { DETACHED, treeKill } from "./proc.js";
+import { DETACHED, isChildAlive, treeKill } from "./proc.js";
 import { readPackageVersion } from "./version.js";
 import { allowedValues, describeOptions } from "./model-options.js";
 
@@ -33,8 +33,13 @@ function envReport(name, fallback = null) {
   return process.env[name] !== undefined ? process.env[name] : fallback;
 }
 
-// Time-boxed: doctor runs when delegation is already broken, so it must survive a wedged launcher.
-export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, signal) {
+/**
+ * Time-boxed: doctor runs when delegation is already broken, so it must survive a wedged launcher.
+ * @param {{ command: string, args?: string[], options?: any }} spawnSpec
+ * @param {number} [timeoutMs]
+ * @param {{ signal?: AbortSignal, onSpawn?: (probe: { pid: number, stop: () => Promise<boolean> }) => void }} [opts]
+ */
+export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, { signal, onSpawn } = {}) {
   const { command, options } = spawnSpec;
   const launcher = String(command || "").replace(/^["']|["']$/g, "");
   const isJsScript = isJsLauncher(launcher);
@@ -71,7 +76,17 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
     child.stderr?.on("data", () => {});
     child.stderr?.on("error", () => {});
     child.on("error", () => finish({ found: false, version: null }));
-    const closed = new Promise((r) => child.once("close", r));
+    let open = true;
+    const closed = new Promise((r) => child.once("close", () => { open = false; r(undefined); }));
+    // True once the probe has closed, false when the kill wait ran out. A closed probe is left
+    // alone: shutdown can reach it later, after its pid is free for reuse.
+    const stop = () => {
+      if (!open) return Promise.resolve(true);
+      const killed = treeKill(child.pid, { childAlive: isChildAlive(child) }).catch(() => {});
+      const bound = new Promise((r) => setTimeout(() => r(false), PROBE_KILL_WAIT_MS).unref?.());
+      return Promise.race([Promise.all([killed, closed]).then(() => true), bound]);
+    };
+    if (child.pid) onSpawn?.({ pid: child.pid, stop });
     child.on("close", (code) => {
       if (abortRequested) return;
       const version = code === 0 ? stdout.trim() || null : null;
@@ -88,15 +103,12 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
       finish({ found: true, version: null, error: `version probe timed out after ${timeoutMs}ms` });
     }, timeoutMs);
     timer.unref?.();
-    // A host interrupt ends the probe at once rather than at its timeout.
-    // Returns once the probe has closed, so doctor does not leave it running; bounded like stop().
+    // A host interrupt ends the probe at once rather than at its timeout, and returns once it closed.
     onAbort = () => {
       // The timeout would otherwise still fire during the kill and return first.
       clearTimeout(timer);
       abortRequested = true;
-      const killed = child.pid ? treeKill(child.pid).catch(() => {}) : Promise.resolve();
-      const bound = new Promise((r) => setTimeout(r, PROBE_KILL_WAIT_MS).unref?.());
-      Promise.race([Promise.all([killed, closed]), bound]).then(() => finish({ found: true, ...aborted }));
+      stop().then(() => finish({ found: true, ...aborted }));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -162,6 +174,8 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
 }
 
 /**
+ * onClientReady receives each process doctor starts, the version probe and then the handshake
+ * agent, so a server shutdown can stop it.
  * @param {{
  *   getClientInfo?: () => { capabilities?: any, version?: any, protocolVersion?: string },
  *   deep?: boolean,
@@ -188,7 +202,7 @@ export async function runDoctor({
   onClientReady,
 } = {}) {
   const { capabilities, version, protocolVersion } = getClientInfo();
-  const agentProbe = await probeAgentVersion(spawnSpec, versionTimeoutMs, signal);
+  const agentProbe = await probeAgentVersion(spawnSpec, versionTimeoutMs, { signal, onSpawn: onClientReady });
 
   /** @type {{ plugin: any, client: any, agent: any & { handshake?: any }, runtime: any, env: any }} */
   const out = {
