@@ -58,7 +58,8 @@ async function replay(choices) {
       if (world.exit) return [];
       const out = [];
       if (!world.eof) out.push("eof");
-      for (const s of Object.keys(SIGNAL_CODES)) if (!world.signals.includes(s)) out.push(s);
+      // The same signal twice too: a second Ctrl-C is the usual way to force an exit.
+      if (world.signals.length < 2) out.push(...Object.keys(SIGNAL_CODES));
       if (world.scheduled.length) out.push("scheduled-exit");
       for (const h of handles) {
         const i = h.attempts.findIndex((a) => a.outcome === null);
