@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-23
+
+### Changed
+
+- A process the server would start after shutdown began fails with `spawn-failed` instead of
+  starting.
+- A stop counts as done once agy's exit was seen and its tree kill finished. On POSIX it waits for
+  the `ps` walk that reaches the commands agy started in their own sessions.
+- An aborted `doctor` version probe returns once its stop saw the probe exit: up to 4 s, where it
+  was 2 s.
+- When a cancel and a host abort both land before the prompt, the result reports the abort.
+
+### Fixed
+
+- A shutdown signal during `doctor` with `deep: true` stops the agent doctor starts for its
+  handshake, rather than exiting with it running.
+- The exit note, the resume hint and the sign-in note reach the caller whatever agy's side threw, a
+  frozen error or a value that is not an Error included.
+- A delegation that fails during the handshake sends agy nothing more: an `initialize` reply that
+  arrives after the failure no longer opens a session.
+
 ## [1.8.0] - 2026-11-23
 
 ### Fixed
