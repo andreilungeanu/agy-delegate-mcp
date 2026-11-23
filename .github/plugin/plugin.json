@@ -1,6 +1,6 @@
 {
   "name": "agy-delegate",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Delegate local coding work to Google Antigravity's CLI agent (agy) through MCP and ACP.",
   "author": {
     "name": "Andrei Lungeanu",

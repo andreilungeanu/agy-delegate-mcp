@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-11-24
+
+### Changed
+
+- A finished task is kept for its hour however many finish, where only the last 100 were kept.
+- Every session the server has seen keeps the model and effort a resume re-applies, and `cancel`
+  and `steer` tell it from an unknown id, where only the last 500 sessions were kept.
+
+### Fixed
+
+- The server shuts down, stopping agy, when its stdio transport closes. When the server's stdout
+  broke, as it does when the host dies, the transport paused stdin, no stdin EOF arrived, and the
+  server and agy kept running.
+- A completed task's result carries `resultType: "complete"`, as the `tools/call` result it stands
+  for, which the tasks extension's client schema requires.
+- A task id resumes its session for as long as the server runs, not only for the hour its task is
+  kept.
+- A finished task's status message is its error, or none, instead of its last progress line.
+- `tasks/update` refuses a request with no `inputResponses`.
+
 ## [2.0.0] - 2026-11-23
 
 `delegate` no longer holds your agent while agy works. In an interactive Claude Code CLI session
