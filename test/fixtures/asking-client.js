@@ -1,5 +1,5 @@
 // A stub agy asking as agy 1.5.14 does: the ask_question call stays pending and the turn ends. It
-// takes a steer as the answer and leaves the call open.
+// takes a steer as the answer and leaves the call open. questions is the call's payload.
 import { EventEmitter } from "node:events";
 import { stampSettlement } from "../../src/acp-client.js";
 
@@ -8,7 +8,7 @@ const ASKED = [
   { is_multi_select: true, options: ["node b.js", "npm test"], question: "Which checks should run?" },
 ];
 
-export function askingClientFactory() {
+export function askingClientFactory({ questions = ASKED } = {}) {
   return () => {
     const client = new EventEmitter();
     let open = false;
@@ -22,7 +22,7 @@ export function askingClientFactory() {
       setMode: async () => {},
       stop: async () => true,
       prompt: async () => {
-        update({ sessionUpdate: "tool_call", toolCallId: "ask1", name: "ask_question", kind: "other", status: "in_progress", title: "Run ask_question", rawInput: { questions: ASKED } });
+        update({ sessionUpdate: "tool_call", toolCallId: "ask1", name: "ask_question", kind: "other", status: "in_progress", title: "Run ask_question", rawInput: { questions } });
         update({ sessionUpdate: "tool_call_update", toolCallId: "ask1", name: "ask_question", kind: "other", status: "pending", title: "Run ask_question" });
         update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Which file?" } });
         return { stopReason: "end_turn", usage };

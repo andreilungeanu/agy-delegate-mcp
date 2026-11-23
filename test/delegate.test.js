@@ -548,20 +548,28 @@ test("questions is reported alongside the warning for a background command still
   assert.match(out.protocolWarnings.join(" "), /npm run dev/);
 });
 
+// Steers while agy's question is open, before its turn ends.
+const steerDuringAsk = (opts) => {
+  const factory = askingClientFactory(opts);
+  return (o) => {
+    const client = factory(o);
+    const prompt = client.prompt;
+    client.prompt = async (...args) => { const turn = await prompt(...args); client.steer("sess-ask", "use b.js"); return turn; };
+    return client;
+  };
+};
+
 test("a steer closes the question agy leaves open, so it is not returned", async () => {
-  const factory = askingClientFactory();
-  const out = await runDelegate({
-    spec: "Rename the variable.", mode: "agent", workspace: process.cwd(),
-    // The steer goes out while agy's question is open, before its turn ends.
-    clientFactory: (o) => {
-      const client = factory(o);
-      const prompt = client.prompt;
-      client.prompt = async (...args) => { const turn = await prompt(...args); client.steer("sess-ask", "use b.js"); return turn; };
-      return client;
-    },
-  });
+  const out = await runDelegate({ spec: "Rename the variable.", workspace: process.cwd(), clientFactory: steerDuringAsk() });
   assert.equal("questions" in out, false);
   assert.equal(out.result, "Renamed as answered.");
+});
+
+test("a steer closes an open question whose questions could not be read", async () => {
+  const out = await runDelegate({ spec: "Rename the variable.", workspace: process.cwd(), clientFactory: steerDuringAsk({ questions: "not a list" }) });
+  assert.equal(out.result, "Renamed as answered.");
+  assert.equal(out.resultSource, undefined);
+  assert.equal(out.protocolWarnings, undefined);
 });
 
 test("runDelegate joins streamed fragments into complete-sentence progress", async () => {
