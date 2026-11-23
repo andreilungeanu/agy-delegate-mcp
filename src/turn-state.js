@@ -119,7 +119,7 @@ export function makeTurnState({ onProgress, progressThrottleMs = 2000 } = {}) {
       if (toolCallId != null && !isTerminalToolStatus(status)) {
         state.activeToolCalls.add(toolCallId);
         // A fresh tool_call frame for a finished id is the agent reusing it, not history.
-        state.finishedToolCalls.delete(toolCallId);
+        if (state.finishedToolCalls.delete(toolCallId)) state.questions.delete(toolCallId);
       }
       if (toolCallId != null && isTerminalToolStatus(status)) state.finishedToolCalls.add(toolCallId);
       if (isTerminalToolStatus(status) && state.activeToolCalls.size === 0) state.collectingPostToolResult = true;

@@ -538,6 +538,17 @@ test("questions are read from a tool_call_update when the opening frame had none
   assert.equal(out.questions.length, 2);
 });
 
+test("a reused ask_question id reports the new call's questions, not the old one's", async () => {
+  const out = await replayResult([
+    ...askQuestion("ask1"),
+    { sessionUpdate: "tool_call_update", toolCallId: "ask1", name: "ask_question", status: "completed" },
+    { sessionUpdate: "tool_call", toolCallId: "ask1", name: "ask_question", kind: "other", status: "in_progress", title: "Run ask_question" },
+    { sessionUpdate: "tool_call_update", toolCallId: "ask1", name: "ask_question", status: "pending", rawInput: { questions: [{ question: "Which name?", options: ["count", "value"] }] } },
+    msgChunk("Which name?"),
+  ]);
+  assert.deepEqual(out.questions, [{ question: "Which name?", options: ["count", "value"] }]);
+});
+
 test("questions is reported alongside the warning for a background command still running", async () => {
   const out = await replayResult([
     runCommand("bg", "npm run dev", "in_progress"),
