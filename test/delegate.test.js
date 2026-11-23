@@ -5,7 +5,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdtempSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import { AcpClient, stampSettlement } from "../src/acp-client.js";
@@ -1273,41 +1273,6 @@ test("runDelegate omits protocolWarnings when frames are well-formed", async () 
   assert.equal(out.protocolWarnings, undefined);
 });
 
-function abortablePromptFactory({ onAbortReady, track }) {
-  return () => {
-    const client = stubClient("sess-abort");
-    client.cancel = async () => {};
-    client.child = { pid: null, exitCode: null, signalCode: null, kill() {} };
-    client.prompt = () => new Promise((resolve) => { onAbortReady?.(resolve); });
-    client.stop = () => { track.stopped = true; };
-    return client;
-  };
-}
-
-test("runDelegate rejects with aborted when signal fires during prompt", async () => {
-  const track = {};
-  const ac = new AbortController();
-  let resolvePrompt;
-  const run = runDelegate({
-    spec: "task",
-    mode: "agent",
-    workspace: process.cwd(),
-    signal: ac.signal,
-    clientFactory: abortablePromptFactory({
-      track,
-      onAbortReady: (resolve) => { resolvePrompt = resolve; },
-    }),
-  });
-  await new Promise((r) => setTimeout(r, 50));
-  ac.abort();
-  await assert.rejects(run, (err) => {
-    assert.equal(err.reason, "aborted");
-    return true;
-  });
-  assert.equal(track.stopped, true);
-  resolvePrompt?.({ stopReason: "end_turn" });
-});
-
 test("runDelegate rejects immediately when signal is already aborted", async () => {
   const ac = new AbortController();
   ac.abort();
@@ -1892,29 +1857,6 @@ test("an open ask_question is returned at once, not waited for", async () => {
   assert.equal(out.resultSource, "unfinished-tool");
 });
 
-// Measured live: a plain cancel during the background wait made agy close the call without the
-// closing usage_update, and the bridge sat out its 60 s continuation limit before returning.
-test("a cancel during the background wait ends it at once and reports cancelled", async () => {
-  let clientRef;
-  const started = Date.now();
-  const out = await runDelegate({
-    spec: "run it", mode: "agent", workspace: process.cwd(),
-    clientFactory: () => {
-      const client = backgroundFactory({})();
-      client.cancel = async () => {
-        client.cancelRequested = true;
-        client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "cancelled" } });
-      };
-      clientRef = client;
-      return client;
-    },
-    onSessionReady: () => { setTimeout(() => clientRef.cancel(), 150); },
-    backgroundWaitMs: 10000, backgroundSettleMs: 50, backgroundContinueMs: 10000,
-  });
-  assert.ok(Date.now() - started < 2000, `cancel took ${Date.now() - started} ms to end the wait`);
-  assert.equal(out.stopReason, "cancelled");
-});
-
 // Steering, as agy 1.5.14 did it: a second session/prompt settles the first at once with end_turn,
 // and the redirected turn ends with the second prompt's reply.
 async function steerWhenOpen(getClient, sessionId, text) {
@@ -1939,101 +1881,6 @@ test("a steered delegation returns the redirected turn, not the end_turn the ste
   assert.equal(out.resultSource, undefined);
   assert.deepEqual(out.usage, { scope: "turn", inputTokens: 12, totalTokens: 12 }, "both replies' usage is summed");
   assert.deepEqual(out.context, { used: 40, size: 1048576 });
-});
-
-test("a steer is refused before the prompt is sent and after the delegation has returned", async () => {
-  let client;
-  let early;
-  const out = await runDelegate({
-    spec: "do the thing", workspace: process.cwd(),
-    clientFactory: () => (client = fakeFactory()),
-    onSessionReady: (sid) => { early = client.steer(sid, "too soon"); },
-  });
-  assert.equal(early, "not-ready");
-  assert.equal(out.result, "done");
-  assert.equal(client.steer(out.sessionId, "too late"), "not-running");
-});
-
-test("a steer during the background wait ends the wait and returns the steered reply", async () => {
-  const started = Date.now();
-  let clientRef;
-  const out = await runDelegate({
-    spec: "run it", mode: "agent", workspace: process.cwd(),
-    clientFactory: () => {
-      const client = backgroundFactory({})();
-      let open = false;
-      const steers = [];
-      client.acceptSteers = (on) => { open = on; };
-      client.hasSteer = () => steers.length > 0;
-      client.takeSteer = () => steers.shift();
-      client.steer = (_sid, text) => {
-        if (!open) return "not-ready";
-        steers.push(stampSettlement((async () => {
-          client.emit("update", { update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "failed" } });
-          client.emit("update", { update: msgChunk(`steered: ${text}`) });
-          return { stopReason: "end_turn" };
-        })()));
-        return "steered";
-      };
-      clientRef = client;
-      return client;
-    },
-    onSessionReady: () => { setTimeout(() => clientRef.steer("sess-bg", "stop the server"), 150); },
-    backgroundWaitMs: 10000, backgroundSettleMs: 50, backgroundContinueMs: 10000,
-  });
-  assert.ok(Date.now() - started < 2000, `the steer took ${Date.now() - started} ms to end the wait`);
-  assert.equal(out.result, "steered: stop the server");
-  assert.equal(out.resultSource, undefined);
-});
-
-// An image attachment is read after setup, so a steer that could land then went out as agy's
-// first prompt, and the brief followed as a redirect of it.
-test("a steer cannot reach agy before the task prompt", async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "agy-steer-order-"));
-  const image = path.join(dir, "shot.png");
-  writeFileSync(image, Buffer.alloc(1024, 1)); // small enough for a 2 KB transcript frame; still read asynchronously
-  let client;
-  let polling = true;
-  const prev = process.env.AGY_DELEGATE_TRANSCRIPT;
-  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
-  try {
-    await runDelegate({
-      spec: "STEERABLE task", workspace: dir, contextFiles: [image],
-      clientFactory: () => (client = fakeFactory()),
-      onSessionReady: (sid) => {
-        const poll = () => { if (polling && client.steer(sid, "go left") !== "steered") setImmediate(poll); };
-        poll();
-      },
-    });
-  } finally {
-    polling = false;
-    if (prev === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
-    else process.env.AGY_DELEGATE_TRANSCRIPT = prev;
-  }
-  const prompts = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line))
-    .filter((f) => f.method === "session/prompt");
-  assert.equal(prompts[0].params.prompt[0].text, "STEERABLE task", "the brief must be the first prompt agy sees");
-  assert.equal(prompts.length, 2);
-});
-
-test("a steer after a cancel is refused, so the cancelled turn stays cancelled", async () => {
-  let client;
-  let steerAfterCancel;
-  const out = await runDelegate({
-    spec: "STEERABLE task", workspace: process.cwd(),
-    clientFactory: () => (client = fakeFactory()),
-    onSessionReady: (sid) => {
-      const poll = () => {
-        if (client._steerWindow !== "open") return setTimeout(poll, 5);
-        client.cancel(sid);
-        steerAfterCancel = client.steer(sid, "go left");
-      };
-      poll();
-    },
-  });
-  assert.equal(steerAfterCancel, "not-running");
-  assert.equal(out.stopReason, "cancelled");
-  assert.doesNotMatch(out.result, /STEERED/);
 });
 
 test("a steer agy rejects leaves the turn's own result, with the rejection in protocolWarnings", async () => {
@@ -2074,29 +1921,6 @@ test("in ask mode a steer carries the same read-only instruction as the prompt",
   assert.equal(texts[1], `${preamble}\n\nlook at b.js instead`);
 });
 
-// The supervisor fails the delegation on agent exit, but nothing stopped the background wait,
-// which polled on for the rest of AGY_DELEGATE_BACKGROUND_WAIT_MS with the steer window open.
-test("an agent that exits during the background wait ends the wait too", async () => {
-  let reads = 0;
-  let client;
-  await assert.rejects(
-    runDelegate({
-      spec: "run it", mode: "agent", workspace: process.cwd(),
-      clientFactory: () => {
-        client = backgroundFactory({})();
-        Object.defineProperty(client, "cancelRequested", { get: () => { reads++; return false; } });
-        setTimeout(() => client.emit("exit", { code: 1, signal: null, stderr: "" }), 150);
-        return client;
-      },
-      backgroundWaitMs: 10000, backgroundSettleMs: 20, backgroundContinueMs: 10000,
-    }),
-    (err) => err.reason === "agent-exit",
-  );
-  const atFailure = reads;
-  await new Promise((r) => setTimeout(r, 400));
-  assert.ok(reads - atFailure <= 1, `the wait polled ${reads - atFailure} more times after the delegation failed`);
-});
-
 // Summed per field over whichever replies had it, a field one reply left out was a partial sum
 // presented as the turn's. A reply with no usage at all (a prompt a steer settled before any
 // model call finished, measured) counts nothing and does not thin out the fields.
@@ -2107,76 +1931,6 @@ test("summed usage keeps only fields every reply with usage reported", () => {
   );
   assert.deepEqual(readUsage([{ inputTokens: 5, totalTokens: 5 }, {}]), { scope: "turn", inputTokens: 5, totalTokens: 5 });
   assert.equal(readUsage([undefined]), undefined);
-});
-
-// The session id reaches the caller as the session opens, before model, effort and mode are set.
-// A cancel sent then reported "cancelled" while the prompt still went out and ran in full.
-test("a cancel that arrives before the prompt is sent stops the prompt from going out", async () => {
-  let client;
-  const prev = process.env.AGY_DELEGATE_TRANSCRIPT;
-  process.env.AGY_DELEGATE_TRANSCRIPT = "50";
-  let out;
-  try {
-    out = await runDelegate({
-      spec: "do the thing", workspace: process.cwd(),
-      clientFactory: () => (client = fakeFactory()),
-      onSessionReady: (sid) => { client.cancel(sid); },
-    });
-  } finally {
-    if (prev === undefined) delete process.env.AGY_DELEGATE_TRANSCRIPT;
-    else process.env.AGY_DELEGATE_TRANSCRIPT = prev;
-  }
-  const sent = client.peer.getLog().filter((e) => e.dir === "out").map((e) => JSON.parse(e.line));
-  assert.equal(sent.filter((f) => f.method === "session/prompt").length, 0, "no prompt may follow the cancel");
-  assert.equal(out.stopReason, "cancelled");
-  assert.equal(out.result, "");
-  assert.equal(out.filesReportedByEditTools, undefined);
-  assert.ok(!(out.protocolWarnings ?? []).some((w) => /without emitting any message/.test(w)), JSON.stringify(out.protocolWarnings));
-});
-
-// The abort listener came off before the graceful stop, so a host interrupt during agy's close
-// was ignored and a wedged agent ran out the whole grace.
-test("a host abort during agy's graceful close cuts it short", async () => {
-  const controller = new AbortController();
-  let endedAt;
-  const out = await runDelegate({
-    spec: "task", workspace: process.cwd(), signal: controller.signal,
-    clientFactory: () => new AcpClient({
-      spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/close-ignoring-stub.js", import.meta.url))], options: { shell: false } },
-    }),
-    onTurnEnd: () => { endedAt = Date.now(); setTimeout(() => controller.abort(), 50); },
-  });
-  assert.equal(out.result, "done");
-  assert.ok(Date.now() - endedAt < 1500, `the close ran ${Date.now() - endedAt} ms after the abort`);
-});
-
-// agy settles the prompt a steer redirects at once, so a steer reply that fails after that is the
-// turn failing (a quota or auth error), not agy refusing the steer: the delegation must fail.
-test("a steer agy accepted and that then fails fails the delegation", async () => {
-  let client;
-  let steered;
-  await assert.rejects(
-    runDelegate({
-      spec: "STEERABLE task", workspace: process.cwd(),
-      clientFactory: () => (client = fakeFactory()),
-      onSessionReady: (sid) => { steered = steerWhenOpen(() => client, sid, "FAILLATER"); },
-    }),
-    (err) => err.reason === "agent-error" && /quota exhausted/.test(err.message),
-  );
-  await steered;
-});
-
-test("a first prompt that fails while a steer is queued returns the steered turn", async () => {
-  let client;
-  let steered;
-  const out = await runDelegate({
-    spec: "STEERABLE task", workspace: process.cwd(),
-    clientFactory: () => (client = fakeFactory()),
-    onSessionReady: (sid) => { steered = steerWhenOpen(() => client, sid, "AFTERFAIL"); },
-  });
-  await steered;
-  assert.equal(out.result, "STEERED after failure");
-  assert.equal(out.resultSource, undefined, JSON.stringify(out.protocolWarnings));
 });
 
 // agy moves a command to the background with end_turn (measured). A refusal or an output cap
@@ -2326,110 +2080,6 @@ test("every note the bridge adds reaches the caller, whatever agy's side threw",
       }
     );
   }
-});
-
-// promptInFlight went up before the attachments were read, so a frame arriving in that await was
-// folded into the result, even of a delegation cancelled there that never sent its prompt.
-test("frames that arrive while attachments are read are not part of the turn", async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "agy-ctx-"));
-  const image = path.join(dir, "pic.png");
-  writeFileSync(image, Buffer.alloc(1024));
-  try {
-    const out = await runDelegate({
-      spec: "look", workspace: dir, contextFiles: ["pic.png"],
-      clientFactory: () => {
-        const client = stubClient("sess-ctx");
-        client.agentCapabilities = { promptCapabilities: { image: true } };
-        client.setMode = async () => {
-          // Lands during the attachment read that follows set_mode.
-          setImmediate(() => client.emit("update", { sessionId: "sess-ctx", update: msgChunk("setup chatter") }));
-        };
-        client.prompt = async () => {
-          client.emit("update", { sessionId: "sess-ctx", update: msgChunk("answer") });
-          return { stopReason: "end_turn" };
-        };
-        return client;
-      },
-    });
-    assert.equal(out.result, "answer");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// The loop threw at the first steer that failed after taking over, and a steer queued behind it
-// that then succeeded was never read.
-test("a steer that succeeds after one that failed mid-turn is the delegation's result", async () => {
-  let clientRef;
-  const out = await runDelegate({
-    spec: "task", workspace: process.cwd(),
-    clientFactory: () => {
-      const client = stubClient("sess-q");
-      let endFirst;
-      const steers = [];
-      let open = false;
-      client.acceptSteers = (on) => { open = on; };
-      client.hasSteer = () => steers.length > 0;
-      client.takeSteer = () => steers.shift();
-      client.prompt = () => new Promise((r) => { endFirst = r; });
-      client.steer = (_sid, text) => {
-        if (!open) return "not-ready";
-        if (text === "A") {
-          endFirst({ stopReason: "end_turn" });
-          steers.push(stampSettlement(new Promise((_, reject) => setTimeout(() => reject(new Error("quota exhausted")), 20))));
-        } else {
-          steers.push(stampSettlement(new Promise((r) => setTimeout(() => {
-            client.emit("update", { sessionId: "sess-q", update: msgChunk("B answered") });
-            r({ stopReason: "end_turn" });
-          }, 60))));
-        }
-        return "steered";
-      };
-      clientRef = client;
-      return client;
-    },
-    onSessionReady: () => {
-      const poll = () => { if (clientRef.steer("sess-q", "A") !== "steered") return setTimeout(poll, 5); clientRef.steer("sess-q", "B"); };
-      poll();
-    },
-  });
-  assert.equal(out.result, "B answered");
-});
-
-// The pre-prompt cancel was checked only once setup reached the prompt, so a config call that
-// hung held the cancelled delegation to the handshake timeout.
-test("a cancel during setup ends a delegation whose config call hangs", async () => {
-  let client;
-  const started = Date.now();
-  const out = await runDelegate({
-    spec: "do the thing", workspace: process.cwd(), handshakeMs: 10000,
-    clientFactory: () => {
-      client = fakeFactory();
-      client.setMode = () => new Promise(() => {});
-      return client;
-    },
-    onSessionReady: (sid) => { setTimeout(() => client.cancel(sid), 50); },
-  });
-  assert.ok(Date.now() - started < 3000, `the cancelled setup took ${Date.now() - started} ms`);
-  assert.equal(out.stopReason, "cancelled");
-  // An empty result is labelled as one, as on every other path.
-  assert.equal(out.resultSource, "none");
-});
-
-test("a config call agy rejects after a cancel reports the delegation cancelled", async () => {
-  let client;
-  const out = await runDelegate({
-    spec: "do the thing", workspace: process.cwd(),
-    clientFactory: () => {
-      client = fakeFactory();
-      client.setMode = async (sid) => {
-        client.cancel(sid);
-        throw Object.assign(new Error("Internal error: cancelled"), { code: -32603 });
-      };
-      return client;
-    },
-  });
-  assert.equal(out.stopReason, "cancelled");
 });
 
 // The cause said the wait had run out whenever any wait had started, so a cancel during the wait

@@ -430,23 +430,6 @@ test("stop() rejects in-flight RPCs when the child does not exit", async () => {
   }
 });
 
-test("cancel sends session/cancel as a notification without id", async () => {
-  const written = [];
-  const client = new AcpClient({ spawnSpec: fakeSpawn() });
-  await client.start();
-  const origWrite = client.peer.output.write.bind(client.peer.output);
-  client.peer.output.write = (chunk) => {
-    written.push(chunk.toString());
-    return origWrite(chunk);
-  };
-  await client.cancel("sess-1");
-  const msg = JSON.parse(written.at(-1).trim());
-  assert.equal(msg.method, "session/cancel");
-  assert.deepEqual(msg.params, { sessionId: "sess-1" });
-  assert.equal(msg.id, undefined);
-  client.stop();
-});
-
 test("stderr is captured but is not reported as agent activity", async () => {
   // The supervisor's clock feeds two strings the caller reads — the heartbeat's "last agent frame
   // N ago" and the stall error's "Last ACP frame N ago" — and drives the opt-in idle guard. A

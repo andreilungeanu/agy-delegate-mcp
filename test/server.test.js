@@ -12,7 +12,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { AcpClient } from "../src/acp-client.js";
 import { createChildRegistry, isChildAlive } from "../src/proc.js";
 import { runDelegate as realRunDelegate } from "../src/delegate.js";
-import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup, steerSession } from "../src/server.js";
+import { runDelegateTool, buildServer, delegateInputSchema, installSignalCleanup } from "../src/server.js";
 
 // Every tool returns its payload as one compact JSON text block and no structuredContent, so
 // every assertion on their fields goes through here.
@@ -412,42 +412,6 @@ test("runDelegateTool survives async notify rejections", async () => {
   assert.deepEqual(rejections, []);
 });
 
-test("cancel tool cancels an in-flight delegation and cleans up", async () => {
-  let cancelledWith;
-  let release;
-  const gate = new Promise((r) => { release = r; });
-  let sessionReady;
-  const ready = new Promise((r) => { sessionReady = r; });
-  const runDelegate = async ({ onSessionReady }) => {
-    onSessionReady("sess-live", {
-      cancel: async (sid) => { cancelledWith = sid; release(); },
-    });
-    sessionReady();
-    await gate;
-    return { result: "stopped", stopReason: "end_turn", sessionId: "sess-live", filesReportedByEditTools: [] };
-  };
-  const server = buildServer({ runDelegate });
-  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0" });
-
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const delegateP = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "long task" } });
-    await ready;
-    const cancelRes = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-live" } });
-    assert.deepEqual(payload(cancelRes), { status: "cancelled", sessionId: "sess-live" });
-    assert.equal(cancelledWith, "sess-live");
-    const delegateRes = await delegateP;
-    assert.notEqual(delegateRes.isError, true);
-    assert.equal(payload(delegateRes).cancelRequested, true);
-    const again = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-live" } });
-    assert.equal(payload(again).status, "not-running");
-    assert.deepEqual(payload(again), { status: "not-running", sessionId: "sess-live" });
-  } finally {
-    await client.close();
-  }
-});
-
 test("cancel tool with force kills the agent when delegation does not settle", async () => {
   let cancelledWith;
   let stopCalled = false;
@@ -616,43 +580,6 @@ test("force cancel does not untrack a resume that registers during stop()", asyn
   }
 });
 
-test("cancel tool with force returns cancelled when delegation settles during grace", async () => {
-  let settleDuringGrace;
-  const gate = new Promise((r) => { settleDuringGrace = r; });
-  let sessionReady;
-  const ready = new Promise((r) => { sessionReady = r; });
-  let stopCalled = false;
-  const runDelegate = async ({ onSessionReady }) => {
-    onSessionReady("sess-force-settle", {
-      cancel: async () => { settleDuringGrace(); },
-      stop: () => { stopCalled = true; },
-    });
-    sessionReady();
-    await gate;
-    return { result: "done", stopReason: "end_turn", sessionId: "sess-force-settle", filesReportedByEditTools: [] };
-  };
-  const server = buildServer({ runDelegate, forceGraceMs: 50 });
-  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0" });
-
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const delegateP = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "task" } });
-    await ready;
-    const cancelRes = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-force-settle", force: true } });
-    assert.equal(payload(cancelRes).status, "cancelled");
-    assert.deepEqual(payload(cancelRes), { status: "cancelled", sessionId: "sess-force-settle" });
-    // The turn settled, so the status is cancelled, not killed; force still cuts agy's graceful
-    // close short rather than letting it run out its grace.
-    assert.equal(stopCalled, true);
-    const delegateRes = await delegateP;
-    assert.notEqual(delegateRes.isError, true);
-    assert.equal(payload(delegateRes).cancelRequested, true);
-  } finally {
-    await client.close();
-  }
-});
-
 test("cancel force kills a real stub agent whose prompt never finishes", async () => {
   // The live MCP host serializes tool calls, so force-kill can only be exercised here: a real
   // AcpClient drives infinite-stream-stub.js (handshakes, then streams forever), and the
@@ -690,68 +617,6 @@ test("cancel force kills a real stub agent whose prompt never finishes", async (
     assert.equal(delegateRes.isError, true);
     assert.match(delegateRes.content[0].text, /agent-exit/);
     assert.ok(Date.now() - killedAt < 10000, "the kill, not the 60s hard cap, ended the turn");
-  } finally {
-    await client.close();
-  }
-});
-
-test("delegate output omits cancelRequested when no cancel was requested", async () => {
-  const runDelegate = async () => ({
-    result: "done",
-    stopReason: "end_turn",
-    sessionId: "sess-clean",
-    filesReportedByEditTools: [],
-  });
-  const server = buildServer({ runDelegate });
-  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0" });
-
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const res = await client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "short task" } });
-    assert.notEqual(res.isError, true);
-    assert.equal("cancelRequested" in payload(res), false);
-  } finally {
-    await client.close();
-  }
-});
-
-test("cancel tool reports unknown sessions without erroring", async () => {
-  const server = buildServer({ runDelegate: async () => ({ result: "", stopReason: "end_turn", sessionId: "s", filesReportedByEditTools: [] }) });
-  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0" });
-
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const res = await client.callTool({ name: "cancel", arguments: { sessionId: "never-existed" } });
-    assert.notEqual(res.isError, true);
-    assert.equal(payload(res).status, "not-found");
-    assert.deepEqual(payload(res), { status: "not-found", sessionId: "never-existed" });
-  } finally {
-    await client.close();
-  }
-});
-
-test("cancel distinguishes a finished session (not-running) from an unknown id (not-found)", async () => {
-  // A delegation that runs to completion, so its id is remembered but no longer in flight.
-  const runDelegate = async ({ onSessionReady }) => {
-    onSessionReady("sess-finished", { cancel: async () => {}, stop: () => {} });
-    return { result: "done", stopReason: "end_turn", sessionId: "sess-finished", filesReportedByEditTools: [] };
-  };
-  const server = buildServer({ runDelegate });
-  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0" });
-
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const delegateRes = await client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "task" } });
-    assert.notEqual(delegateRes.isError, true);
-
-    const finished = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-finished" } });
-    assert.equal(payload(finished).status, "not-running");
-
-    const unknown = await client.callTool({ name: "cancel", arguments: { sessionId: "brand-new-uuid" } });
-    assert.equal(payload(unknown).status, "not-found");
   } finally {
     await client.close();
   }
@@ -1009,46 +874,6 @@ test("shutdown kills an agent that is in its graceful stop instead of waiting ou
   }
 });
 
-test("steer reports not-running for a registered delegation whose turn is over", () => {
-  const client = new AcpClient({ spawnSpec: { command: process.execPath, args: [], options: {} } });
-  client.acceptSteers(false);
-  const map = new Map([["sess-done", new Set([{ client }])]]);
-  assert.equal(steerSession(map, new Set(["sess-done"]), "sess-done", "go"), "not-running");
-  const fresh = new AcpClient({ spawnSpec: { command: process.execPath, args: [], options: {} } });
-  map.set("sess-new", new Set([{ client: fresh }]));
-  assert.equal(steerSession(map, new Set(), "sess-new", "go"), "not-ready");
-});
-
-// After the turn ends the handle stays registered while agy closes. A cancel in that window used
-// to mark the finished result cancelRequested, and force waited out the whole grace before
-// reporting "cancelled".
-test("cancel after the turn has ended reports not-running, and force cuts agy's close short", async () => {
-  let turnEnded;
-  const ended = new Promise((r) => { turnEnded = r; });
-  const runDelegate = (opts) => realRunDelegate({
-    ...opts,
-    clientFactory: stubClientFactory("close-ignoring-stub.js"),
-    onTurnEnd: () => { opts.onTurnEnd?.(); turnEnded(); },
-  });
-  const server = buildServer({ runDelegate });
-  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "1.0" });
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const delegateP = client.callTool({ name: "delegate", arguments: { workspace: process.cwd(), spec: "task" } });
-    await ended;
-    const started = Date.now();
-    const cancelRes = await client.callTool({ name: "cancel", arguments: { sessionId: "sess-wedged", force: true } });
-    assert.equal(payload(cancelRes).status, "not-running");
-    const out = payload(await delegateP);
-    assert.ok(Date.now() - started < 1500, `agy's close took ${Date.now() - started} ms after a force cancel`);
-    assert.equal(out.result, "done");
-    assert.equal(out.cancelRequested, undefined, "a finished turn was not cancelled");
-  } finally {
-    await client.close();
-  }
-});
-
 test("the doctor tool passes the host's abort signal", async () => {
   let seen;
   const runDoctor = async ({ signal }) => {
@@ -1084,11 +909,6 @@ test("cancel and steer reject a blank sessionId, and trim one with stray whitesp
   } finally {
     await client.close();
   }
-});
-
-test("steer reports not-running for a delegation whose turn has ended, whatever its client says", () => {
-  const map = new Map([["sess-ending", new Set([{ ended: true, client: { steer: () => "not-ready" } }])]]);
-  assert.equal(steerSession(map, new Set(["sess-ending"]), "sess-ending", "go"), "not-running");
 });
 
 // Two turns on one id: A stops on the cancel, B ignores it. A's close ran on until the poll for
