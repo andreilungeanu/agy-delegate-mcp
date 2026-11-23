@@ -245,6 +245,32 @@ test("a cancel before the first setup call keeps every setup call off the wire",
   assert.deepEqual(sent.filter((m) => /^session\/(set_model|set_config_option|set_mode|prompt)$/.test(m)), []);
 });
 
+// The handshake timeout ends the delegation while initialize is on the wire, and its reply reaches
+// setup only after that. Setup went on from it: it asked agy for a session that nothing would close
+// and announced it after the call had failed.
+test("a handshake reply that lands after the delegation failed opens no session", async () => {
+  const sent = [];
+  const ready = [];
+  let failed;
+  const done = new Promise((r) => { failed = r; });
+  await assert.rejects(
+    runDelegate({
+      spec: "do the thing", workspace: process.cwd(), handshakeMs: 100,
+      onSessionReady: (id) => { ready.push(id); },
+      clientFactory: () => tappedFactory((method, _params, send) => {
+        sent.push(method);
+        const reply = send();
+        return method === "initialize" ? reply.then(async (r) => { await done; return r; }) : reply;
+      }),
+    }),
+    (err) => err.reason === "handshake-timeout",
+  );
+  failed();
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(sent, ["initialize"]);
+  assert.deepEqual(ready, []);
+});
+
 // The cancel goes out while the model request is on the wire, and its reply reaches setup only
 // once the delegation has returned. Setup went on from that reply and recorded the cancelled
 // delegation's model, so the next resume ran on it.

@@ -146,7 +146,7 @@ export class AcpClient extends EventEmitter {
 
   // Kept for the model check and doctor, without a second handshake.
   async initialize() {
-    const res = await this.peer.request("initialize", { protocolVersion: 1, clientInfo: { name: "agy-delegate-mcp", version: VERSION }, clientCapabilities: {} });
+    const res = await this._setup("initialize", { protocolVersion: 1, clientInfo: { name: "agy-delegate-mcp", version: VERSION }, clientCapabilities: {} });
     this.protocolVersion = res?.protocolVersion;
     this.agentCapabilities = res?.agentCapabilities;
     return res;
@@ -165,22 +165,23 @@ export class AcpClient extends EventEmitter {
   async newSession(cwd, { appendSystemPrompt } = {}) {
     const params = { cwd, mcpServers: [] };
     if (appendSystemPrompt) params._meta = { antigravity: { systemPrompt: { append: appendSystemPrompt } } };
-    const res = this._captureSession(await this.peer.request("session/new", params));
+    const res = this._captureSession(await this._setup("session/new", params));
     if (typeof res?.sessionId === "string") this._sessions.add(res.sessionId);
     return res;
   }
   // resume reopens a session without replaying it, and rejects an id agy has never seen.
   async resumeSession(sessionId, cwd) {
-    const res = this._captureSession(await this.peer.request("session/resume", { sessionId, cwd, mcpServers: [] }));
+    const res = this._captureSession(await this._setup("session/resume", { sessionId, cwd, mcpServers: [] }));
     this._sessions.add(sessionId);
     return res;
   }
   // agy returns every session the account has, ignoring cwd, in one page.
-  listSessions(params = {}) { return this.peer.request("session/list", params); }
+  listSessions(params = {}) { return this._setup("session/list", params); }
   setModel(sessionId, modelId) { return this._setup("session/set_model", { sessionId, modelId }); }
   setConfigOption(sessionId, configId, value) { return this._setup("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
   setMode(sessionId, modeId) { return this._setup("session/set_mode", { sessionId, modeId }); }
-  // A reply that lands once a cancel ended setup is refused too, so no setup step runs on from it.
+  // Every request before the task prompt. A reply that lands once setup ended, at a cancel or a
+  // failed delegation, is refused too, so no setup step runs on from it.
   async _setup(method, params) {
     if (this._phase !== "setup") throw wireClosed(this._phase);
     const reply = await this.peer.request(method, params);
