@@ -75,6 +75,19 @@ function fakeFactory() {
   });
 }
 
+// The fake agent behind a wire tap: each request the client puts on the wire goes through
+// tap(method, params, send), and send() is the real request.
+function tappedFactory(tap) {
+  const client = fakeFactory();
+  const start = client.start.bind(client);
+  client.start = async (...args) => {
+    await start(...args);
+    const request = client.peer.request.bind(client.peer);
+    client.peer.request = (method, params) => tap(method, params, () => request(method, params));
+  };
+  return client;
+}
+
 // A real spawn, not a stub emit: the crash this covers depends on where the frame is handled.
 // A stub calling client.emit() from inside prompt() has its throw caught by the prompt promise
 // and only fails that delegation. Off the wire the same throw runs in the readline callback,
@@ -165,25 +178,24 @@ test("runDelegate returns assembled result for a fresh session", async () => {
 // A cancel with no call in flight for it to reject: the wire's own refusal is all that keeps the
 // task prompt off it.
 test("a cancel landing after setup's last reply sends no task prompt", async () => {
-  let prompts = 0;
+  const sent = [];
   let sessionId;
   const out = await runDelegate({
     spec: "do the thing", workspace: process.cwd(),
     onSessionReady: (id) => { sessionId = id; },
     clientFactory: () => {
-      const client = fakeFactory();
+      const client = tappedFactory((method, _params, send) => { sent.push(method); return send(); });
       const setMode = client.setMode.bind(client);
       client.setMode = async (...args) => {
         const res = await setMode(...args);
         client.cancel(sessionId);
         return res;
       };
-      const prompt = client.prompt.bind(client);
-      client.prompt = (...args) => { prompts++; return prompt(...args); };
       return client;
     },
   });
-  assert.equal(prompts, 0);
+  assert.ok(sent.includes("session/set_mode"), sent.join());
+  assert.ok(!sent.includes("session/prompt"), "the task prompt went out after the cancel");
   assert.equal(out.stopReason, "cancelled");
   assert.equal(out.result, "");
   assert.equal(out.resultSource, "none");
@@ -223,22 +235,41 @@ test("a cancel while an attachment is read decides the delegation at once", asyn
 
 test("a cancel before the first setup call keeps every setup call off the wire", async () => {
   const sent = [];
+  // Neither is agy's default, so each would take a set_config_option.
   const out = await runDelegate({
-    spec: "do the thing", workspace: process.cwd(), model: "gemini-4-neon",
+    spec: "do the thing", workspace: process.cwd(), model: "gemini-3.8-flash", effort: "low",
     onSessionReady: (id, client) => { client.cancel(id); },
+    clientFactory: () => tappedFactory((method, _params, send) => { sent.push(method); return send(); }),
+  });
+  assert.equal(out.stopReason, "cancelled");
+  assert.deepEqual(sent.filter((m) => /^session\/(set_model|set_config_option|set_mode|prompt)$/.test(m)), []);
+});
+
+// The cancel goes out while the model request is on the wire, and its reply reaches setup only
+// once the delegation has returned. Setup went on from that reply and recorded the cancelled
+// delegation's model, so the next resume ran on it.
+test("a setup reply that lands after a cancel leaves the session's remembered settings alone", async () => {
+  const run = (args) => runDelegate({ spec: "do the thing", workspace: process.cwd(), resumeSessionId: "known-late", clientFactory: fakeFactory, ...args });
+  await run({ model: "gemini-3.8-flash" });
+  let returned;
+  const done = new Promise((r) => { returned = r; });
+  const cancelled = await run({
+    model: "claude-sonnet-5-5",
     clientFactory: () => {
-      const client = fakeFactory();
-      const start = client.start.bind(client);
-      client.start = async (...args) => {
-        await start(...args);
-        const request = client.peer.request.bind(client.peer);
-        client.peer.request = (method, params) => { sent.push(method); return request(method, params); };
-      };
+      const client = tappedFactory((method, params, send) => {
+        if (method !== "session/set_config_option") return send();
+        const reply = send();
+        client.cancel(params.sessionId);
+        return reply.then(async (r) => { await done; return r; });
+      });
       return client;
     },
   });
-  assert.equal(out.stopReason, "cancelled");
-  assert.deepEqual(sent.filter((m) => /set_config_option|set_mode|prompt/.test(m)), []);
+  assert.equal(cancelled.stopReason, "cancelled");
+  returned();
+  await new Promise((r) => setTimeout(r, 50));
+  const bare = await run({});
+  assert.equal(bare.effectiveModel, "gemini-3.8-flash");
 });
 
 // Off the wire: the counts come from the session/prompt reply and the context from the

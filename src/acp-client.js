@@ -180,9 +180,12 @@ export class AcpClient extends EventEmitter {
   setModel(sessionId, modelId) { return this._setup("session/set_model", { sessionId, modelId }); }
   setConfigOption(sessionId, configId, value) { return this._setup("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
   setMode(sessionId, modeId) { return this._setup("session/set_mode", { sessionId, modeId }); }
-  _setup(method, params) {
+  // A reply that lands once a cancel ended setup is refused too, so no setup step runs on from it.
+  async _setup(method, params) {
     if (this._phase !== "setup") throw wireClosed(this._phase);
-    return this.peer.request(method, params);
+    const reply = await this.peer.request(method, params);
+    if (this._phase !== "setup") throw wireClosed(this._phase);
+    return reply;
   }
   get phase() { return this._phase; }
 
