@@ -2279,6 +2279,26 @@ test("an agent that does not exit after the stop is retried and reported", async
   assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
+// Frozen, and thrown before the session opens, so only the exit note tries to write to it.
+test("a failure whose message cannot be written still goes out when agy did not exit", async () => {
+  const boom = Object.freeze(new Error("boom"));
+  await assert.rejects(
+    () => runDelegate({
+      spec: "task", workspace: process.cwd(),
+      clientFactory: () => {
+        const client = stubClient("sess-frozen");
+        client.start = async () => { throw boom; };
+        client.stop = async () => false;
+        return client;
+      },
+    }),
+    (err) => {
+      assert.equal(err, boom, `${err?.name}: ${err?.message}`);
+      return true;
+    }
+  );
+});
+
 // agy reopens a resumed session at its defaults (agy #1460, measured on 1.5.14), and every
 // delegation is a new agy process, so a resume that left model out quietly ran agy's default.
 test("a resume keeps the model and effort set earlier in the session unless the caller changes them", async () => {

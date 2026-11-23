@@ -773,8 +773,9 @@ export async function runDelegate({
     if (exited === false) {
       const pid = client.child?.pid;
       const note = `the bridge stopped agy${pid ? ` (pid ${pid})` : ""} but did not see agy exit; it may still be running.`;
-      // The result or the error is already decided; the note rides on whichever is going out.
-      if (failed) failed.message += ` Note: ${note}`;
+      // The result or the error is already decided; the note rides on whichever is going out. A
+      // frozen error takes no note, and a throw here would replace it.
+      if (failed) { try { failed.message += ` Note: ${note}`; } catch {} }
       else if (out) (out.protocolWarnings ??= []).push(note);
     }
   }
