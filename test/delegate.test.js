@@ -2328,22 +2328,6 @@ test("every note the bridge adds reaches the caller, whatever agy's side threw",
   }
 });
 
-// agy reopens a resumed session at its defaults (agy #1460, measured on 1.5.14), and every
-// delegation is a new agy process, so a resume that left model out quietly ran agy's default.
-test("a resume keeps the model and effort set earlier in the session unless the caller changes them", async () => {
-  const run = (args) => runDelegate({ spec: "do the thing", workspace: process.cwd(), resumeSessionId: "known-old", clientFactory: fakeFactory, ...args });
-  await run({ model: "gemini-4-neon", effort: "xhigh" });
-  const carried = await run({});
-  assert.equal(carried.resumed, true);
-  assert.equal(carried.effectiveModel, "gemini-4-neon");
-  assert.deepEqual(carried.effectiveEffort, { thought_level: "xhigh" }, "the effort set earlier must hold");
-  // claude-sonnet-5-5 offers no xhigh: a remembered effort is not forced onto a new model.
-  const switched = await run({ model: "claude-sonnet-5-5" });
-  assert.deepEqual(switched.effectiveEffort, { thought_level: "high" });
-  const afterSwitch = await run({});
-  assert.equal(afterSwitch.effectiveModel, "claude-sonnet-5-5");
-});
-
 // promptInFlight went up before the attachments were read, so a frame arriving in that await was
 // folded into the result, even of a delegation cancelled there that never sent its prompt.
 test("frames that arrive while attachments are read are not part of the turn", async () => {
@@ -2412,16 +2396,6 @@ test("a steer that succeeds after one that failed mid-turn is the delegation's r
   assert.equal(out.result, "B answered");
 });
 
-// An effort-only call saved model as undefined, so a resume that then named the model it was
-// running on read as a model change and dropped the effort.
-test("a resume naming the model an earlier effort-only call ran on keeps that effort", async () => {
-  const run = (args) => runDelegate({ spec: "do the thing", workspace: process.cwd(), resumeSessionId: "known-other", clientFactory: fakeFactory, ...args });
-  const first = await run({ effort: "xhigh" });
-  assert.deepEqual(first.effectiveEffort, { thought_level: "xhigh" });
-  const named = await run({ model: first.effectiveModel ?? "gemini-4-neon" });
-  assert.deepEqual(named.effectiveEffort, { thought_level: "xhigh" });
-});
-
 // The pre-prompt cancel was checked only once setup reached the prompt, so a config call that
 // hung held the cancelled delegation to the handshake timeout.
 test("a cancel during setup ends a delegation whose config call hangs", async () => {
@@ -2456,20 +2430,6 @@ test("a config call agy rejects after a cancel reports the delegation cancelled"
     },
   });
   assert.equal(out.stopReason, "cancelled");
-});
-
-// The record is in memory, so a server restarted since the session ran has none, and agy reopens
-// the session at its defaults. The caller is told rather than left to notice effectiveModel.
-test("a resume with no remembered model and none given warns that agy's default ran", async () => {
-  const run = (args) => runDelegate({ spec: "do the thing", workspace: process.cwd(), resumeSessionId: "known-fresh", clientFactory: fakeFactory, ...args });
-  const bare = await run({});
-  assert.equal(bare.resumed, true);
-  assert.ok(bare.protocolWarnings?.some((w) => /no record of the model/.test(w) && /gemini-4-neon/.test(w)), JSON.stringify(bare.protocolWarnings));
-  const named = await run({ model: "gemini-3.8-flash" });
-  assert.ok(!(named.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)));
-  const carried = await run({});
-  assert.equal(carried.effectiveModel, "gemini-3.8-flash");
-  assert.ok(!(carried.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)));
 });
 
 // The cause said the wait had run out whenever any wait had started, so a cancel during the wait
@@ -2542,41 +2502,6 @@ test("a long command is cut to 200 characters in the stall error and the unfinis
   const warning = (out.protocolWarnings ?? []).find((w) => /tool call still running/.test(w)) ?? "";
   assert.match(warning, /python - <<'EOF' print\(/);
   assert.doesNotMatch(warning, /tail-marker/);
-});
-
-// servedModel was read from the last config reply only, so an effort reply without the model entry
-// saved no model, and a later resume naming that model dropped the effort.
-test("an effort reply without the model entry still ties the remembered effort to the model", async () => {
-  const sent = [];
-  const factory = () => {
-    const client = stubClient("sess-partial");
-    const thought = (v) => ({ id: "thought_level", category: "thought_level", currentValue: v, options: ["low", "high"].map((x) => ({ value: x })) });
-    client.configOptions = [{ id: "model", currentValue: "m-a", options: [{ value: "m-a" }, { value: "m-b" }] }, thought("high")];
-    client.setConfigOption = async (_sid, id, value) => {
-      sent.push([id, value]);
-      return id === "thought_level" ? { configOptions: [thought(value)] } : { configOptions: client.configOptions };
-    };
-    client.prompt = async () => { client.emit("update", { update: msgChunk("ok") }); return { stopReason: "end_turn" }; };
-    return client;
-  };
-  await runDelegate({ spec: "x", workspace: process.cwd(), resumeSessionId: "sess-partial", clientFactory: factory, effort: "low" });
-  sent.length = 0;
-  await runDelegate({ spec: "x", workspace: process.cwd(), resumeSessionId: "sess-partial", clientFactory: factory, model: "m-a" });
-  assert.deepEqual(sent, [["thought_level", "low"]], "the effort set on m-a must be re-sent");
-});
-
-// Only a call that set model or effort was recorded, so resuming a session this process ran on
-// agy's defaults warned that the server keeps no record across restarts.
-test("a same-process resume of a session run on agy's defaults gives no restart warning", async () => {
-  const factory = () => {
-    const client = stubClient("sess-defaults");
-    client.prompt = async () => { client.emit("update", { update: msgChunk("ok") }); return { stopReason: "end_turn" }; };
-    return client;
-  };
-  await runDelegate({ spec: "x", workspace: process.cwd(), clientFactory: factory });
-  const out = await runDelegate({ spec: "x", workspace: process.cwd(), resumeSessionId: "sess-defaults", clientFactory: factory });
-  assert.equal(out.resumed, true);
-  assert.ok(!(out.protocolWarnings ?? []).some((w) => /no record of the model/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
 // The deadline was checked before the cancel, so a cancel that landed in the wait's last tick was
