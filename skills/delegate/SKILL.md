@@ -145,6 +145,6 @@ not confined to it; attachments are untrusted (the bridge does not scan for prom
 - **`cancel`** — best-effort cancel by `sessionId`. Needs a host that can call tools while
   `delegate` runs. If the agent ignores it and keeps going, call again with `force: true`
   to kill the process after a grace period.
-- **`steer`** — redirect a running delegation by `sessionId` with a new instruction; the pending
-  `delegate` call returns the redirected turn. Needs a host that can call tools while `delegate`
+- **`steer`** — redirect a running delegation by `sessionId` with a new instruction; `delegate`
+  (or its task) then returns the redirected turn. Needs a host that can call tools while `delegate`
   runs; after the turn ends, resume instead.

@@ -120,9 +120,10 @@ nothing.
 
 The first notification is `session ready: <sessionId>`, the id `cancel` and `steer` take while the
 turn runs. Thinking, streamed response sentences, tool starts, edited files, and the turn title the agent
-picks (`turn titled: …`) arrive as ephemeral MCP progress notifications — separate from
-`result`. The title is a live label for telling concurrent delegations apart and is also named
-in timeout errors; it is not returned in the result.
+picks (`turn titled: …`) arrive as ephemeral MCP progress notifications, or as the task's status
+message when `delegate` runs as an MCP task — separate from `result`. The title is a live label
+for telling concurrent delegations apart and is also named in timeout errors; it is not returned
+in the result.
 
 While a turn is running, a `still working — <elapsed>, last agent frame <age> ago, running: <tool>`
 heartbeat is emitted periodically. A large frame age is normal during a long shell command; it is
@@ -159,7 +160,7 @@ exit reports `cancelled` and keeps the session cancellable, so force can be retr
 not in this process's recent session history.
 
 **`steer`** — `{sessionId, message}` → `status: "steered" | "not-ready" | "not-running" | "not-found"`.
-Sends `message` into the running turn as a new instruction; the pending `delegate` call returns
+Sends `message` into the running turn as a new instruction; `delegate` (or its task) then returns
 the redirected turn's result, with `usage` summed over the turn's replies. agy stops a running
 command to follow it and finishes a reply it is already writing first, so `result` can open with
 the end of that reply. In ask mode the message carries ask mode's instruction. `steered` means the
