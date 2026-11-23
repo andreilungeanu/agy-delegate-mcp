@@ -107,6 +107,19 @@ test("runDoctor probes a .mjs launcher with node", async () => {
   assert.equal(out.agent.error, undefined);
 });
 
+// version-argv.mjs prints the arguments it received, as node <script> stands in for a wrapper.
+test("runDoctor keeps the launcher prefix before acp when probing the version", async () => {
+  const argvPath = fileURLToPath(new URL("./fixtures/version-argv.mjs", import.meta.url));
+  const probe = async (command, args) => {
+    const out = await runDoctor({ spawnSpec: { command, args, options: { shell: false } } });
+    assert.equal(out.agent.error, undefined);
+    return out.agent.version;
+  };
+  assert.equal(await probe(process.execPath, [argvPath, "acp"]), '["--version"]', "the script runs, not node --version");
+  assert.equal(await probe(process.execPath, [argvPath, "acp", "--trailing"]), '["--version"]', "what follows acp is dropped");
+  assert.equal(await probe(argvPath, ["--stdio"]), '["--version"]', "with no acp token, --version alone");
+});
+
 // The probe opens stderr as a pipe. With no reader on it the launcher cannot drain its own
 // write buffer and never exits, so a merely noisy launcher gets diagnosed as one that spawned
 // and never answered — the same output as a wedged agent, for a healthy one.
@@ -533,7 +546,7 @@ test("runDoctor hands its version probe to onClientReady, whose stop ends it", a
   }
 });
 
-test("runDoctor probes through cmd.exe with a launcher path holding spaces", { skip: process.platform !== "win32" && "cmd.exe quoting" }, async () => {
+test("runDoctor probes through cmd.exe with a launcher path and a prefix argument holding spaces", { skip: process.platform !== "win32" && "cmd.exe quoting" }, async () => {
   const argvPath = fileURLToPath(new URL("./fixtures/version-argv.mjs", import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), "doctor launcher "));
   try {
@@ -541,7 +554,7 @@ test("runDoctor probes through cmd.exe with a launcher path holding spaces", { s
     writeFileSync(launcher, `@echo off\r\n"${process.execPath}" "${argvPath}" %*\r\n`);
     const out = await rawRunDoctor({ spawnSpec: { command: launcher, args: ["two words", "acp"], options: { shell: true } } });
     assert.equal(out.agent.error, undefined);
-    assert.equal(out.agent.version, '["--version"]');
+    assert.equal(out.agent.version, '["two words","--version"]');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

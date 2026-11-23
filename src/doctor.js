@@ -40,11 +40,15 @@ function envReport(name, fallback = null) {
  * @param {{ signal?: AbortSignal, onSpawn?: (probe: { pid: number, stop: () => Promise<boolean> }) => void }} [opts]
  */
 export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_MS, { signal, onSpawn } = {}) {
-  const { command, options } = spawnSpec;
+  const { command, args, options } = spawnSpec;
   const launcher = String(command || "").replace(/^["']|["']$/g, "");
   const isJsScript = isJsLauncher(launcher);
   const execCommand = isJsScript ? process.execPath : command;
-  const execArgs = isJsScript ? [launcher, "--version"] : ["--version"];
+  // --version replaces the acp subcommand, so a launcher prefix ("cmd /c agy acp") still reaches
+  // agy. With no acp token, --version goes alone.
+  const acpAt = Array.isArray(args) ? args.indexOf("acp") : -1;
+  const versionArgs = [...(acpAt > 0 ? args.slice(0, acpAt) : []), "--version"];
+  const execArgs = isJsScript ? [launcher, ...versionArgs] : versionArgs;
   // Found before the spawn: through cmd.exe a missing launcher still spawns and would read as found.
   const launch = spawnArgv(execCommand, execArgs, options);
   if (!launch) return Promise.resolve({ found: false, version: null });
