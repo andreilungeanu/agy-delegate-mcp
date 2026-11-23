@@ -531,12 +531,11 @@ export async function runDelegate({
         const blocks = await buildContextBlocks(contextFiles, workspace, client, contextWarnings);
         // Raised with the prompt, so frames sent while attachments were read are not folded in.
         promptInFlight = true;
-        const first = client.sendTaskPrompt(
+        const settled = await client.sendTaskPrompt(
           sessionId,
           [{ type: "text", text: promptText }, ...blocks],
           { steerPrefix: mode === "ask" ? ASK_PREAMBLE : undefined },
         );
-        const settled = await first;
         let turn = settled.ok ? settled.value : undefined;
         let turnError = "error" in settled ? settled.error : undefined;
         let turnSeq = settled.seq;
