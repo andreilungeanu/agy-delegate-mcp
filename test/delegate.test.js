@@ -159,6 +159,33 @@ test("runDelegate returns assembled result for a fresh session", async () => {
   assert.deepEqual(out.filesReportedByEditTools, ["hello.txt"]);
 });
 
+// A cancel with no call in flight for it to reject: the wire's own refusal is all that keeps the
+// task prompt off it.
+test("a cancel landing after setup's last reply sends no task prompt", async () => {
+  let prompts = 0;
+  let sessionId;
+  const out = await runDelegate({
+    spec: "do the thing", workspace: process.cwd(),
+    onSessionReady: (id) => { sessionId = id; },
+    clientFactory: () => {
+      const client = fakeFactory();
+      const setMode = client.setMode.bind(client);
+      client.setMode = async (...args) => {
+        const res = await setMode(...args);
+        client.cancel(sessionId);
+        return res;
+      };
+      const prompt = client.prompt.bind(client);
+      client.prompt = (...args) => { prompts++; return prompt(...args); };
+      return client;
+    },
+  });
+  assert.equal(prompts, 0);
+  assert.equal(out.stopReason, "cancelled");
+  assert.equal(out.result, "");
+  assert.equal(out.resultSource, "none");
+});
+
 // Off the wire: the counts come from the session/prompt reply and the context from the
 // usage_update frame, the two places agy 1.5.14 reports them.
 test("runDelegate returns the turn's token usage and the session's context fill", async () => {
