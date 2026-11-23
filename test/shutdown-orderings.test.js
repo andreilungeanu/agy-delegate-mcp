@@ -110,7 +110,7 @@ function check({ world, kids, next }) {
   for (const c of kids) {
     if (!c.attempts.length && !c.kills.length) {
       out.push(c.exited
-        ? `${c.name} exited by itself and was never stopped, so nothing killed what it left in its group (the bug 543e98b fixed)`
+        ? `${c.name} exited by itself and was never stopped, so nothing killed what it left in its process group`
         : `${c.name} was never stopped`);
     }
     if (c.confirmed) continue;
