@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createChildRegistry, isChildAlive, spawnChild, treeKill } from "../src/proc.js";
 
 const posixOnly = { skip: process.platform === "win32" ? "POSIX process groups" : false };
@@ -112,6 +115,33 @@ test("treeKill reaches a descendant the agent started in its own session", posix
   }
 });
 
+// ps answers 2.5 s after its snapshot, past KILL_WAIT_MS, as on a loaded machine; the agent exits
+// by itself meanwhile, leaving its command in its own session for the walk's kill.
+test("a stop is not done while the walk that reaches a command in its own session runs", posixOnly, async () => {
+  const shim = mkdtempSync(path.join(tmpdir(), "slow-ps-"));
+  const script = ["#!/bin/sh", `out=$(PATH='${process.env.PATH}' ps "$@")`, "sleep 2.5", `printf '%s\\n' "$out"`];
+  writeFileSync(path.join(shim, "ps"), script.join("\n") + "\n", { mode: 0o755 });
+  const PATH = process.env.PATH;
+  const agentSrc = [
+    "const { spawn } = require('node:child_process');",
+    "const g = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' });",
+    "console.log(g.pid);",
+    "setTimeout(() => process.exit(0), 500);",
+  ].join("\n");
+  const tracked = spawnChild(process.execPath, ["-e", agentSrc], { shell: false }, { stdio: ["ignore", "pipe", "ignore"] }, createChildRegistry());
+  const grandchild = Number(await new Promise((resolve) => tracked.child.stdout.once("data", (d) => resolve(String(d).trim()))));
+  process.env.PATH = `${shim}:${PATH}`;
+  try {
+    assert.equal(await tracked.stop(), true);
+    const reaped = Date.now() + 300;
+    while (alive(grandchild) && Date.now() < reaped) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(alive(grandchild), false, "the stop was done before the walk killed the command in its own session");
+  } finally {
+    process.env.PATH = PATH;
+    try { process.kill(grandchild, "SIGKILL"); } catch {}
+  }
+});
+
 // A tracked child whose kill attempts end as scripted: true or false is the exit seen or not,
 // "reject" and "throw" a kill that failed.
 function scripted(registry, outcomes) {
@@ -160,6 +190,7 @@ test("killNow reaches a child until a stop saw its exit", async () => {
   assert.equal(missed.calls.killNow, 1);
   assert.equal(seen.calls.killNow, 0, "its pid may belong to another process by now");
 });
+
 
 test("release drops a child no stop is running on, and leaves one whose stop is under way to it", async () => {
   const registry = createChildRegistry();

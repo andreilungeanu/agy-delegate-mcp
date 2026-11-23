@@ -73,8 +73,10 @@ async function killAndSeeExit(child, timeoutMs) {
   const exited = alive
     ? /** @type {Promise<boolean>} */ (new Promise((resolve) => child.once("exit", () => resolve(true))))
     : Promise.resolve(true);
-  // Also for an exited child: on POSIX its commands can outlive it in its process group.
-  const killed = treeKill(child.pid, { childAlive: alive }).catch(() => {});
+  // Also for an exited child: on POSIX its commands can outlive it in its process group. A walk
+  // still running from an earlier attempt is waited on too: only its ps snapshot saw the leader alive.
+  const killed = Promise.all([treeKills.get(child), treeKill(child.pid, { childAlive: alive }).catch(() => {})]);
+  treeKills.set(child, killed);
   /** @type {NodeJS.Timeout | undefined} */
   let timer;
   const bounded = /** @type {Promise<boolean>} */ (new Promise((resolve) => {
@@ -83,10 +85,13 @@ async function killAndSeeExit(child, timeoutMs) {
   const observed = await Promise.race([exited, bounded]);
   // The tree kill too, on the same deadline: on POSIX it walks the tree with ps first, and a child
   // exiting meanwhile would end the attempt before its commands were killed.
-  await Promise.race([killed, bounded]);
+  const treeKilled = await Promise.race([killed.then(() => true), bounded]);
   clearTimeout(timer);
-  return observed;
+  return observed && treeKilled;
 }
+
+/** @type {WeakMap<import("node:child_process").ChildProcess, Promise<unknown>>} */
+const treeKills = new WeakMap();
 
 // Last resort for a process about to exit: no ps walk. POSIX only; on win32 the kill is taskkill,
 // which a stop runs.
