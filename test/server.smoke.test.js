@@ -28,15 +28,12 @@ const isAlive = (pid) => {
 };
 
 // The real server with a doctor call held in its version probe: the launcher writes its pid and
-// never answers --version.
-async function serverInDoctorProbe(t) {
+// never answers --version, nor ACP when started as the agent.
+async function serverInDoctorProbe(t, doctorArgs = {}) {
   const pidFile = join(tmpdir(), `agy-shutdown-probe-${process.pid}-${Date.now()}`);
+  const stub = fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url));
   const server = spawn(process.execPath, [ENTRY], {
-    env: {
-      ...process.env,
-      ACP_AGENT_COMMAND: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)),
-      AGY_TEST_PIDFILE: pidFile,
-    },
+    env: { ...process.env, ACP_AGENT_COMMAND: process.execPath, ACP_AGENT_ARGS: `"${stub}" acp`, AGY_TEST_PIDFILE: pidFile },
     stdio: ["pipe", "ignore", "ignore"],
   });
   const exited = new Promise((resolve) => server.once("exit", resolve));
@@ -49,12 +46,12 @@ async function serverInDoctorProbe(t) {
   const send = (msg) => server.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
   send({ id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } });
   send({ method: "notifications/initialized" });
-  send({ id: 2, method: "tools/call", params: { name: "doctor", arguments: {} } });
+  send({ id: 2, method: "tools/call", params: { name: "doctor", arguments: doctorArgs } });
   const deadline = Date.now() + 10000;
   while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
   pid = Number(readFileSync(pidFile, "utf8").trim());
   assert.ok(isAlive(pid), "the probe is running when the host shuts down");
-  return { server, exited, pid };
+  return { server, exited, pid, pidFile };
 }
 
 // stdin EOF is a stdio host's shutdown. On win32 a child that is not detached dies with the server.
@@ -75,4 +72,17 @@ test("a second signal during shutdown kills doctor's version probe before the se
   const reaped = Date.now() + 1000;
   while (isAlive(pid) && Date.now() < reaped) await new Promise((r) => setTimeout(r, 20));
   assert.equal(isAlive(pid), false, "the probe must not outlive the server");
+});
+
+// deep starts the handshake agent once the probe ends, so the signal that ends the probe also
+// clears the way for the agent. It writes its pid over the probe's a moment after it starts.
+test("a signal during doctor's deep probe leaves no agent running after the server exits", { skip: process.platform === "win32" && "POSIX signals" }, async (t) => {
+  const { server, exited, pid, pidFile } = await serverInDoctorProbe(t, { deep: true });
+  server.kill("SIGTERM");
+  await exited;
+  await new Promise((r) => setTimeout(r, 1000));
+  const last = Number(readFileSync(pidFile, "utf8").trim());
+  t.after(() => { if (isAlive(last)) try { process.kill(last, "SIGKILL"); } catch {} });
+  assert.equal(isAlive(pid), false, "the probe must not outlive the server");
+  assert.equal(isAlive(last), false, `doctor's agent (pid ${last}) outlived the server`);
 });
