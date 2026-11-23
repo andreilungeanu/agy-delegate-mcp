@@ -11,9 +11,8 @@ const STDERR_CAP = 64 * 1024;
 // How long a graceful stop gives agy to exit by itself before the kill. agy took 200–400 ms.
 export const GRACEFUL_STOP_MS = 2000;
 
-// The wire's phase, as one field: each phase lists the transitions it allows and the rest are
-// refused, so the order the phases run in is this table rather than the call order of several
-// flags. The agent's exit outranks every other transition, being a fact about the process.
+// The wire's phase, as one field: each phase lists the transitions it allows and refuses the rest,
+// so the order they run in is this table rather than the call order of several flags.
 /** @typedef {"setup" | "running" | "cancelled-in-setup" | "cancelled" | "ended" | "exited"} WirePhase */
 /** @typedef {"prompt" | "cancel" | "end" | "exit"} WireTransition */
 /** @type {Record<WirePhase, Partial<Record<WireTransition, WirePhase>>>} */
@@ -69,15 +68,6 @@ export class AcpClient extends EventEmitter {
   }
 
   get child() { return this._tracked?.child; }
-
-  get phase() { return this._phase; }
-
-  /** @param {WireTransition} transition @returns {WirePhase | undefined} */
-  _advance(transition) {
-    const next = PHASES[this._phase][transition];
-    if (next) this._phase = next;
-    return next;
-  }
 
   // The stderr tail an exit error quotes; not counted as activity. Kept as chunks and joined on
   // read, which is cheap for a noisy agent; the StringDecoder keeps split UTF-8 characters whole.
@@ -193,6 +183,15 @@ export class AcpClient extends EventEmitter {
   setModel(sessionId, modelId) { return this.peer.request("session/set_model", { sessionId, modelId }); }
   setConfigOption(sessionId, configId, value) { return this.peer.request("session/set_config_option", { sessionId, configId, value: String(value) }); } // configId, not optionId; ACP wants a string value
   setMode(sessionId, modeId) { return this.peer.request("session/set_mode", { sessionId, modeId }); }
+  get phase() { return this._phase; }
+
+  /** @param {WireTransition} transition @returns {WirePhase | undefined} */
+  _advance(transition) {
+    const next = PHASES[this._phase][transition];
+    if (next) this._phase = next;
+    return next;
+  }
+
   // Every prompt on the wire goes through here, the task prompt and each steer alike.
   prompt(sessionId, blocks) {
     if (this._phase !== "setup" && this._phase !== "running") throw wireClosed(this._phase);
@@ -200,9 +199,7 @@ export class AcpClient extends EventEmitter {
   }
   // The task prompt, and the only way into the running phase: the prompt goes on the wire and the
   // steer window opens in this one synchronous call, so no caller can order them the other way.
-  // agy takes a session/prompt sent mid-turn as a redirect: the prompt in flight settles at once
-  // with end_turn, the new one when the redirected turn ends (measured, agy 1.5.14). steerPrefix
-  // goes ahead of each steer, as ask mode's instruction goes ahead of the spec.
+  // steerPrefix goes ahead of each steer, as ask mode's instruction goes ahead of the spec.
   /** @param {string} sessionId @param {any[]} blocks @param {{ steerPrefix?: string }} [opts] */
   sendTaskPrompt(sessionId, blocks, { steerPrefix } = {}) {
     if (!this._advance("prompt")) throw wireClosed(this._phase);
@@ -211,6 +208,8 @@ export class AcpClient extends EventEmitter {
   }
   // The turn is decided: agy's reply to a steer accepted from here on would reach nobody.
   endTurn() { this._advance("end"); }
+  // agy takes a session/prompt sent mid-turn as a redirect: the one in flight settles at once with
+  // end_turn, this one when the redirected turn ends (measured, agy 1.5.14).
   /** @returns {"steered" | "not-ready" | "not-running"} */
   steer(sessionId, text) {
     if (this._phase === "setup") return "not-ready";
