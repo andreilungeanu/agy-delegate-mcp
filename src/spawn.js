@@ -28,7 +28,7 @@ export function splitArgs(raw) {
 // which only the flag covers.
 export const DEFAULT_AGENT_ARGS = Object.freeze(["acp", "--dangerously-skip-permissions", "--disable-telemetry"]);
 
-// shell:true on win32 marks the spec for the Windows launch at each spawn site (spawnArgv): the
+// shell:true on win32 marks the spec for the Windows launch in spawnChild (spawnArgv): the
 // command is found first and started by file type, and only a .cmd or .bat reaches cmd.exe, which
 // parses its line. Safe because both values come from the environment, as trusted as this process.
 // Never route host or caller input into them: that would be command injection.
@@ -62,8 +62,8 @@ export function spawnCommandLine(command, args, options) {
 }
 
 /**
- * What to hand spawn() for a spec, or null when the launcher is not found. Applied at each spawn
- * site, after doctor has built its --version args from the spec as configured. On win32 the command
+ * What to hand spawn() for a spec, or null when the launcher is not found. Applied in spawnChild,
+ * after doctor has built its --version args from the spec as configured. On win32 the command
  * is looked up on every spawn (an update can move it) and started by the type of the file found:
  * an .exe or .com directly, a .ps1 through PowerShell, anything else through cmd.exe.
  * @param {string} command @param {string[] | undefined} args
