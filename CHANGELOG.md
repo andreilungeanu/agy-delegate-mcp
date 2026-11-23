@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-23
+
+### Added
+
+- `execution` in the delegate result: tool calls per kind, and the commands agy ran with exit codes
+  (the last 8 plus older failures, repeats folded into `runs`).
+- `questions`: agy's open questions as `{question, options, multiSelect?, recommended?}[]`. Answer
+  by resuming with the answers in `spec`.
+- `doctor` reports `client.protocolVersion`.
+
+### Changed
+
+- agy is launched with `--disable-telemetry`; `ACP_AGENT_ARGS` replaces the arguments.
+- MCP SDK v2 (`@modelcontextprotocol/server` 2.4.0): the server takes 2025-era and 2026-07-28
+  hosts.
+
+### Fixed
+
+- A steer sent while agy's question is open is taken as its answer: the result is agy's reply, not
+  the question. A steer agy rejects leaves the question open.
+
 ## [1.6.0] - 2026-11-22
 
 ### Changed
