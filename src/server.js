@@ -9,6 +9,7 @@ import { runDelegate as runDelegateDefault } from "./delegate.js";
 import { runDoctor as runDoctorDefault } from "./doctor.js";
 import { VERSION, readPackageVersion } from "./version.js";
 import { DETACHED, children } from "./proc.js";
+import { TASKS_EXTENSION, createTaskStore, listsTasks, registerTaskHandlers, runAsTask } from "./tasks.js";
 
 const ICON_BASE = `https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v${VERSION}/assets`;
 /** @type {Array<{ src: string, mimeType: string, sizes: string[], theme: "light" | "dark" }>} */
@@ -52,6 +53,10 @@ function rememberSession(set, id) {
   set.add(id);
   if (set.size > SEEN_SESSIONS_CAP) set.delete(set.values().next().value);
 }
+
+// Delegations answered as MCP tasks. Module-level, as inFlight: a task outlives the request that
+// started it, and serveStdio may build more than one server instance.
+const taskStore = createTaskStore();
 
 // Loaded at connect: only what a caller needs to decide whether to delegate. Call-time facts go on
 // the parameter descriptions.
@@ -183,33 +188,40 @@ export function steerSession(map, seen, sessionId, message) {
   return "not-running";
 }
 
+/** @returns {(message: string) => void} */
+export function progressNotifier(ctx) {
+  const progressToken = ctx?.mcpReq?._meta?.progressToken;
+  if (progressToken == null) return () => {};
+  let progress = 0;
+  return (message) => {
+    // An unhandled rejection would exit the server; the try catches a sync throw.
+    try {
+      Promise.resolve(ctx.mcpReq.notify({
+        method: "notifications/progress",
+        params: { progressToken, progress: ++progress, message },
+      })).catch(() => {});
+    } catch {}
+  };
+}
+
 /**
  * @param {{
  *   args: any, ctx?: any,
  *   runDelegate: (opts: any) => Promise<any>,
  *   inFlight: Map<string, Set<any>>,
  *   seenSessions?: Set<string>,
+ *   signal?: AbortSignal,
+ *   onProgress?: (message: string) => void,
+ *   onPromptSent?: (sessionId: string) => void,
+ *   onTurnEnd?: () => void,
  * }} deps
  * @returns {Promise<import("@modelcontextprotocol/server").CallToolResult>}
  */
-export async function runDelegateTool({ args, ctx, runDelegate, inFlight, seenSessions = new Set() }) {
+export async function runDelegateTool({
+  args, ctx, runDelegate, inFlight, seenSessions = new Set(),
+  signal = ctx?.mcpReq?.signal, onProgress = progressNotifier(ctx), onPromptSent, onTurnEnd,
+}) {
   const { spec, mode, resumeSessionId, workspace, model, effort, contextFiles } = args;
-
-  const progressToken = ctx?.mcpReq?._meta?.progressToken;
-  /** @type {(message: string) => void} */
-  let onProgress = () => {};
-  if (progressToken != null) {
-    let progress = 0;
-    onProgress = (message) => {
-      // An unhandled rejection would exit the server; the try catches a sync throw.
-      try {
-        Promise.resolve(ctx.mcpReq.notify({
-          method: "notifications/progress",
-          params: { progressToken, progress: ++progress, message },
-        })).catch(() => {});
-      } catch {}
-    };
-  }
 
   let capturedSessionId;
   let handle;
@@ -224,7 +236,8 @@ export async function runDelegateTool({ args, ctx, runDelegate, inFlight, seenSe
       effort,
       contextFiles,
       onProgress,
-      signal: ctx?.mcpReq?.signal,
+      signal,
+      onPromptSent,
       onSessionReady: (sessionId, client) => {
         capturedSessionId = sessionId;
         handle = { client, cancelRequested: false };
@@ -234,7 +247,10 @@ export async function runDelegateTool({ args, ctx, runDelegate, inFlight, seenSe
         // mid-run.
         onProgress(`session ready: ${sessionId}`);
       },
-      onTurnEnd: () => { if (handle) handle.ended = true; },
+      onTurnEnd: () => {
+        if (handle) handle.ended = true;
+        onTurnEnd?.();
+      },
     });
     if (handle?.cancelRequested) out.cancelRequested = true;
     return { content: [{ type: "text", text: JSON.stringify(out) }] };
@@ -258,15 +274,27 @@ const sessionIdInput = z.string().trim().min(1).describe("From delegate's \"sess
  *   runDelegate?: (opts: any) => Promise<any>,
  *   runDoctor?: (opts: any) => Promise<any>,
  *   forceGraceMs?: number,
+ *   inFlight?: Map<string, Set<any>>,
+ *   era?: "legacy" | "modern",
+ *   tasks?: ReturnType<typeof createTaskStore>,
  * }} [opts]
  */
-export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDoctorInjected, forceGraceMs = 5000 } = {}) {
+export function buildServer({
+  runDelegate: runDelegateInjected, runDoctor: runDoctorInjected, forceGraceMs = 5000,
+  inFlight: flights = inFlight, era, tasks = taskStore,
+} = {}) {
   const runDelegate = runDelegateInjected || runDelegateDefault;
   const runDoctor = runDoctorInjected || runDoctorDefault;
+  // Tasks only on a 2026-07-28 instance: the SDK also lifts envelope keys off 2025-era requests.
+  const servesTasks = era === "modern";
   const server = new McpServer(
     { name: "agy-delegate-mcp", version: VERSION, icons: SERVER_ICONS },
-    { instructions: SERVER_INSTRUCTIONS }
+    {
+      instructions: SERVER_INSTRUCTIONS,
+      ...(servesTasks ? { capabilities: { extensions: { [TASKS_EXTENSION]: {} } } } : {}),
+    }
   );
+  if (servesTasks) registerTaskHandlers(server, tasks);
 
   server.registerTool(
     "delegate",
@@ -282,7 +310,12 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         openWorldHint: true,
       },
     },
-    async (args, ctx) => runDelegateTool({ args, ctx, runDelegate, inFlight, seenSessions })
+    async (args, ctx) => {
+      /** @param {Record<string, any>} [over] */
+      const run = (over) => runDelegateTool({ args, ctx, runDelegate, inFlight: flights, seenSessions, ...over });
+      if (!servesTasks || !listsTasks(ctx)) return run();
+      return /** @type {any} */ (runAsTask({ run, signal: ctx?.mcpReq?.signal, notify: progressNotifier(ctx), store: tasks }));
+    }
   );
 
   server.registerTool(
@@ -303,7 +336,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       },
     },
     async ({ sessionId, force }) => {
-      const handles = inFlight.get(sessionId);
+      const handles = flights.get(sessionId);
       if (!handles || handles.size === 0) {
         // A finished session is still resumable, unlike an unknown id.
         const known = seenSessions.has(sessionId);
@@ -333,7 +366,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       const graceEnds = Date.now() + forceGraceMs;
       for (;;) {
         for (const handle of live) {
-          if (!cut.has(handle) && (handle.ended || !inFlight.get(sessionId)?.has(handle))) {
+          if (!cut.has(handle) && (handle.ended || !flights.get(sessionId)?.has(handle))) {
             cut.add(handle);
             closing.push(stopQuietly(handle));
           }
@@ -349,7 +382,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
       if (toKill.length === 0) return statusResult("cancelled", sessionId);
       // "killed" needs an observed exit; without one the handles stay and force can be retried.
       if (!observed.every(Boolean)) return statusResult("cancelled", sessionId);
-      for (const handle of toKill) unregisterInFlight(inFlight, sessionId, handle);
+      for (const handle of toKill) unregisterInFlight(flights, sessionId, handle);
       return statusResult("killed", sessionId);
     }
   );
@@ -371,7 +404,7 @@ export function buildServer({ runDelegate: runDelegateInjected, runDoctor: runDo
         openWorldHint: true,
       },
     },
-    async ({ sessionId, message }) => statusResult(steerSession(inFlight, seenSessions, sessionId, message), sessionId)
+    async ({ sessionId, message }) => statusResult(steerSession(flights, seenSessions, sessionId, message), sessionId)
   );
 
   server.registerTool(
@@ -475,7 +508,8 @@ if (isMain) {
     console.log(readPackageVersion());
   } else {
     installSignalCleanup();
-    // One factory serves both protocol eras: a 2025-era initialize pins a legacy instance.
-    serveStdio(() => buildServer());
+    // One factory serves both protocol eras: a 2025-era initialize pins a legacy instance, and only
+    // a modern one answers with tasks.
+    serveStdio(({ era }) => buildServer({ era }));
   }
 }
