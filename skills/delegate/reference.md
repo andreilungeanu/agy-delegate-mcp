@@ -12,7 +12,7 @@ launched as `agy acp --dangerously-skip-permissions --disable-telemetry`.
 | `model` | agy's default | Base model id (`gemini-4-neon`, `gemini-3.8-flash`). Rejected before the turn starts if agy does not offer it; the error names the ids it does. |
 | `effort` | — | agy thinking level for the selected model (`low`, `medium`, `high`, `xhigh`). Exact and model-specific. |
 | `workspace` | required | Working directory for the agent. Smallest directory holding the task's files; with no such directory the project root is the floor. Must already exist; never create one for the call. |
-| `resumeSessionId` | — | Resume an existing agy session. When `delegate` ran as an MCP task, its server-side task id works too. |
+| `resumeSessionId` | — | Resume an existing agy session. When `delegate` ran as an MCP task, its server-side task id works too, while this server process runs. |
 | `contextFiles` | — | Paths to attach instead of pasting contents into `spec`. Text files become `resource_link`s the agent may open; images (png/jpg/gif/webp, <5MB) are sent inline. Relative paths resolve against `workspace` but are **not restricted to it**. Attachments are untrusted — the bridge does not scan for prompt injection. Skips are reported in `protocolWarnings`, never fatal. |
 
 agy offers each model in two spellings: `agy models` and ACP's model list carry the level as a

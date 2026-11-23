@@ -457,6 +457,27 @@ test("a task's id resumes the session its run opened, after tasks/cancel stopped
   }
 });
 
+test("a task's id still resumes its session once the task itself is dropped", async () => {
+  let t = Date.now();
+  const pids = [];
+  const stopped = realOver("escalation-stub.js", {}, pids);
+  const resumes = [];
+  const resumed = async (opts) => { resumes.push(opts.resumeSessionId); return { result: "ok", sessionId: opts.resumeSessionId, resumed: true }; };
+  const tasks = createTaskStore({ now: () => t });
+  const raw = await connectRaw({ runDelegate: (opts) => (opts.resumeSessionId ? resumed : stopped)(opts), tasks });
+  try {
+    const { result: task } = await raw.call().reply;
+    await raw.send("tasks/cancel", { taskId: task.taskId }).reply;
+    assert.ok(await waitUntil(() => !isAlive(pids[0])), "the agent must be stopped");
+    t += 60 * 60 * 1000 + 1;
+    assert.equal(tasks.get(task.taskId), undefined, "the task should have been dropped");
+    await raw.call({ resumeSessionId: task.taskId }, { tasks: false }).reply;
+    assert.deepEqual(resumes, ["sess-escalate"]);
+  } finally {
+    await raw.close();
+  }
+});
+
 test("a finished delegation does not evict a concurrent one holding the same session id", async () => {
   // A resume can race the turn it resumes, so two live delegations can share a session id.
   // The one that finishes first must not deregister the other — cancel then reported a
