@@ -156,7 +156,8 @@ export function createChildRegistry() {
     // For a second signal, which exits at once.
     killAllNow() {
       closed = true;
-      for (const kill of live.values()) kill.killNow();
+      // Run from a signal handler that exits next: one failed kill must not keep the rest from firing.
+      for (const kill of live.values()) { try { kill.killNow(); } catch {} }
     },
   };
 }

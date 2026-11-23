@@ -191,6 +191,13 @@ test("killNow reaches a child until a stop saw its exit", async () => {
   assert.equal(seen.calls.killNow, 0, "its pid may belong to another process by now");
 });
 
+test("killAllNow reaches every child when one kill throws", () => {
+  const registry = createChildRegistry();
+  registry.track(() => ({ kill: async () => false, killNow: () => { throw new Error("kill threw"); } }));
+  const after = scripted(registry, []);
+  registry.killAllNow();
+  assert.equal(after.calls.killNow, 1);
+});
 
 test("release drops a child no stop is running on, and leaves one whose stop is under way to it", async () => {
   const registry = createChildRegistry();
