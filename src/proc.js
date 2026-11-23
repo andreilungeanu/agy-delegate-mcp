@@ -73,10 +73,14 @@ async function killAndSeeExit(child, timeoutMs) {
   const exited = alive
     ? /** @type {Promise<boolean>} */ (new Promise((resolve) => child.once("exit", () => resolve(true))))
     : Promise.resolve(true);
-  // Also for an exited child: on POSIX its commands can outlive it in its process group. A walk
-  // still running from an earlier attempt is waited on too: only its ps snapshot saw the leader alive.
-  const killed = Promise.all([treeKills.get(child), treeKill(child.pid, { childAlive: alive }).catch(() => {})]);
-  treeKills.set(child, killed);
+  // Also for an exited child: on POSIX its commands can outlive it in its process group. One walk at
+  // a time: a walk still running from an earlier attempt has sent no kill yet, and a second one
+  // would end past this attempt's deadline after the first had killed the child.
+  let killed = treeKills.get(child);
+  if (!killed) {
+    killed = treeKill(child.pid, { childAlive: alive }).catch(() => {}).finally(() => treeKills.delete(child));
+    treeKills.set(child, killed);
+  }
   /** @type {NodeJS.Timeout | undefined} */
   let timer;
   const bounded = /** @type {Promise<boolean>} */ (new Promise((resolve) => {

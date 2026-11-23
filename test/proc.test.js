@@ -115,13 +115,20 @@ test("treeKill reaches a descendant the agent started in its own session", posix
   }
 });
 
-// ps answers 2.5 s after its snapshot, past KILL_WAIT_MS, as on a loaded machine; the agent exits
-// by itself meanwhile, leaving its command in its own session for the walk's kill.
-test("a stop is not done while the walk that reaches a command in its own session runs", posixOnly, async () => {
+// ps answers 2.5 s after its snapshot, past KILL_WAIT_MS, as on a loaded machine. Returns the PATH
+// to restore.
+function slowPs() {
   const shim = mkdtempSync(path.join(tmpdir(), "slow-ps-"));
   const script = ["#!/bin/sh", `out=$(PATH='${process.env.PATH}' ps "$@")`, "sleep 2.5", `printf '%s\\n' "$out"`];
   writeFileSync(path.join(shim, "ps"), script.join("\n") + "\n", { mode: 0o755 });
   const PATH = process.env.PATH;
+  process.env.PATH = `${shim}:${PATH}`;
+  return PATH;
+}
+
+// The agent exits by itself during the slow walk, leaving its command in its own session for the
+// walk's kill.
+test("a stop is not done while the walk that reaches a command in its own session runs", posixOnly, async () => {
   const agentSrc = [
     "const { spawn } = require('node:child_process');",
     "const g = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' });",
@@ -130,7 +137,7 @@ test("a stop is not done while the walk that reaches a command in its own sessio
   ].join("\n");
   const tracked = spawnChild(process.execPath, ["-e", agentSrc], { shell: false }, { stdio: ["ignore", "pipe", "ignore"] }, createChildRegistry());
   const grandchild = Number(await new Promise((resolve) => tracked.child.stdout.once("data", (d) => resolve(String(d).trim()))));
-  process.env.PATH = `${shim}:${PATH}`;
+  const PATH = slowPs();
   try {
     assert.equal(await tracked.stop(), true);
     const reaped = Date.now() + 300;
@@ -139,6 +146,19 @@ test("a stop is not done while the walk that reaches a command in its own sessio
   } finally {
     process.env.PATH = PATH;
     try { process.kill(grandchild, "SIGKILL"); } catch {}
+  }
+});
+
+// The agent stays up until the slow walk's kill, so the stop's first attempt sees no exit and the
+// retry starts while that walk runs.
+test("a stop retried during a slow walk sees the exit that walk brings", posixOnly, async () => {
+  const tracked = spawnChild(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { shell: false }, { stdio: "ignore" }, createChildRegistry());
+  const PATH = slowPs();
+  try {
+    assert.equal(await tracked.stop(), true, "the child exited, yet the stop reported it did not");
+  } finally {
+    process.env.PATH = PATH;
+    try { process.kill(tracked.child.pid, "SIGKILL"); } catch {}
   }
 });
 
