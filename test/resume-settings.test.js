@@ -64,13 +64,20 @@ function expected({ first, kind, second }) {
   if (model !== undefined && model !== DEFAULT_MODEL) sent.push(["model", model]);
   if (effort !== undefined) sent.push(["thought_level", effort]);
   const served = model ?? DEFAULT_MODEL;
+  // What the second call leaves on record for the session it ran on, which a bare resume applies.
+  const kept = model !== undefined || effort !== undefined ? { model: served, effort } : {};
+  const thirdSent = [];
+  if (kept.model !== undefined && kept.model !== DEFAULT_MODEL) thirdSent.push(["model", kept.model]);
+  if (kept.effort !== undefined) thirdSent.push(["thought_level", kept.effort]);
   return {
     sent,
     resumed: kind !== "falls-back" ? true : undefined,
     effectiveModel: served !== second.model ? served : undefined,
     effectiveEffort: { thought_level: effort ?? DEFAULT_LEVEL },
     warnsNoRecord: kind === "no-record" && second.model === undefined,
+    noRecordNamesModel: true,
     warnsFellBack: kind === "falls-back",
+    third: { sent: thirdSent, resumed: true, effectiveModel: kept.model ?? DEFAULT_MODEL, effectiveEffort: { thought_level: kept.effort ?? DEFAULT_LEVEL } },
   };
 }
 
@@ -103,16 +110,24 @@ test("a resume applies the settings the rules call for, in every combination", a
     });
     if (c.kind === "no-record") agySessions.add(id);
     else await run(undefined, id, c.first);
+    // agy no longer has the session the bridge remembers settings for.
+    if (c.kind === "falls-back") agySessions.delete(id);
     sent.length = 0;
-    const out = await run(c.kind === "falls-back" ? `${id}-gone` : id, `${id}-fresh`, c.second);
+    const out = await run(id, `${id}-fresh`, c.second);
+    const secondSent = [...sent];
+    sent.length = 0;
+    const third = await run(out.sessionId, `${id}-third`, {});
     const want = expected(c);
+    const noRecord = (out.protocolWarnings ?? []).filter((w) => /no record of the model/.test(w));
     const got = {
-      sent,
+      sent: secondSent,
       resumed: out.resumed,
       effectiveModel: out.effectiveModel,
       effectiveEffort: out.effectiveEffort,
-      warnsNoRecord: (out.protocolWarnings ?? []).some((w) => /no record of the model/.test(w) && w.includes(`(${out.effectiveModel ?? c.second.model})`)),
+      warnsNoRecord: noRecord.length > 0,
+      noRecordNamesModel: noRecord.every((w) => w.includes(`(${out.effectiveModel ?? c.second.model})`)),
       warnsFellBack: (out.protocolWarnings ?? []).some((w) => /failed, started a fresh session/.test(w)),
+      third: { sent, resumed: third.resumed, effectiveModel: third.effectiveModel, effectiveEffort: third.effectiveEffort },
     };
     try { assert.deepEqual(got, want); } catch {
       failures.push(`${JSON.stringify(c)}\n    got  ${JSON.stringify(got)}\n    want ${JSON.stringify(want)}`);
