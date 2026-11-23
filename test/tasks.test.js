@@ -77,6 +77,31 @@ test("a failed task carries an internal error and a cancelled one keeps its stat
   assert.equal(view.statusMessage, "cancelled; resume with resumeSessionId sess-x");
 });
 
+// Copied from the run's error, the status read "delegate failed [aborted]: …", a reason no blocking
+// call returns. A cancelled task carries only what changes what to do next.
+test("a cancelled task names a resume that fell back and an agent the stop did not see exit, not the run's error", async () => {
+  const store = createTaskStore();
+  const fellBack = "resuming sess-old had already failed (agy has no session sess-old), so this ran as a fresh session and none of that earlier work was in context.";
+  const unseen = "the bridge stopped agy (pid 7) but did not see agy exit; it may still be running.";
+  let end;
+  let reportUnseen = (_note) => {};
+  const answer = await runAsTask({
+    run: ({ onPromptSent, onUnseenExit }) => {
+      onPromptSent("sess-new", undefined, fellBack);
+      reportUnseen = onUnseenExit;
+      return new Promise((resolve) => { end = resolve; });
+    },
+    store,
+  });
+  const task = store.get(answer.taskId);
+  store.cancel(task);
+  assert.equal(task.statusMessage, `cancelled; resume with resumeSessionId sess-new. Note: ${fellBack}`);
+  reportUnseen(unseen);
+  end({ isError: true, content: [{ type: "text", text: "delegate failed [aborted]: delegation aborted by MCP host." }] });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(store.view(task).statusMessage, `cancelled; resume with resumeSessionId sess-new. Note: ${fellBack} Note: ${unseen}`);
+});
+
 test("a run that fails before its prompt is sent rejects runAsTask instead of creating a task", async () => {
   const store = createTaskStore();
   await assert.rejects(runAsTask({ run: async () => { throw new Error("setup failed"); }, store }), /setup failed/);

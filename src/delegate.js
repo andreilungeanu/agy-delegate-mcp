@@ -295,7 +295,8 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   contextFiles?: string[], clientFactory?: (opts: any) => any,
  *   idleMs?: number, handshakeMs?: number, hardCapMs?: number, timeoutMs?: number,
  *   onSessionReady?: (sessionId: string, client: any) => void,
- *   onPromptSent?: (sessionId: string) => void,
+ *   onPromptSent?: (sessionId: string, resumeNote?: string) => void,
+ *   onUnseenExit?: (note: string) => void,
  *   onTurnEnd?: () => void,
  *   onProgress?: (message: string) => void,
  *   progressThrottleMs?: number, heartbeatMs?: number, signal?: AbortSignal,
@@ -306,7 +307,7 @@ export async function runDelegate({
   spec, mode = "agent", resumeSessionId, workspace,
   model, effort, contextFiles, clientFactory,
   idleMs, handshakeMs, hardCapMs, timeoutMs,
-  onSessionReady, onPromptSent, onTurnEnd, onProgress, progressThrottleMs = 2000,
+  onSessionReady, onPromptSent, onUnseenExit, onTurnEnd, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
   // Quiet after agy's closing usage_update before its continuation counts as over, and how long
@@ -476,6 +477,10 @@ export async function runDelegate({
 
   let sessionId;
   let resumeError;
+  // Otherwise a resume hint reads as continuing work that was never in context.
+  const resumeNote = () => (resumeError
+    ? `resuming ${resumeSessionId} had already failed (${resumeError}), so this ran as a fresh session and none of that earlier work was in context.`
+    : undefined);
   /** @type {{ cause: any, reason?: string, notes: string[] } | undefined} */
   let failure;
   /** @type {any} */
@@ -538,7 +543,7 @@ export async function runDelegate({
           { steerPrefix: mode === "ask" ? ASK_PREAMBLE : undefined },
         );
         // Every argument has been accepted and steers are open, so a caller may stop waiting.
-        try { onPromptSent?.(sessionId); } catch {}
+        try { onPromptSent?.(sessionId, resumeNote()); } catch {}
         const settled = await first;
         let turn = settled.ok ? settled.value : undefined;
         let turnError = "error" in settled ? settled.error : undefined;
@@ -700,7 +705,8 @@ export async function runDelegate({
     const isTimeout = reason === "hard-cap" || reason === "idle-timeout";
     // A handshake timeout gets the forensics but not the long-command advice: no prompt was sent.
     const isStall = isTimeout || reason === "handshake-timeout";
-    // Not on an abort: the SDK sends no response to a request its host cancelled.
+    // Not on an abort: a cancelled request gets no response, and a cancelled task keeps its own
+    // status message.
     if (isStall || reason === "agent-exit") {
       const age = fmtDuration(supervisor.msSinceActivity());
       notes.push(`\n\nLast ACP frame ${age} ago${state.lastToolLabel ? `; last tool call: ${state.lastToolLabel}` : ""}.`);
@@ -709,11 +715,7 @@ export async function runDelegate({
       if (files.length) notes.push(` Files reported edited: ${files.join(", ")}.`);
     }
     // Any failure after the session opens leaves a live session, unknown-model and effort included.
-    if (resumeError) {
-      // Otherwise the resume hint reads as continuing work that was never in context.
-      notes.push(` Note: resuming ${resumeSessionId} had already failed (${resumeError}),`
-        + ` so this ran as a fresh session and none of that earlier work was in context.`);
-    }
+    if (resumeError) notes.push(` Note: ${resumeNote()}`);
     if (sessionId) notes.push(` Resume with resumeSessionId ${sessionId}.`);
     if (isTimeout) {
       // Name the knob that fired: the hard cap does not govern an idle-timeout.
@@ -755,6 +757,7 @@ export async function runDelegate({
       // The result or the error is already decided; the note rides on whichever is going out.
       if (failure) failure.notes.push(` Note: ${note}`);
       else if (out) (out.protocolWarnings ??= []).push(note);
+      try { onUnseenExit?.(note); } catch {}
     }
   }
   // After teardown, so the exit note it adds is in the message.
