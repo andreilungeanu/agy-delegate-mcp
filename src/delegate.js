@@ -16,15 +16,9 @@ import { transcriptFrames } from "./jsonrpc.js";
 export const DEFAULT_HANDSHAKE_MS = 60000;
 
 // Model and effort last set on each session by this process. agy reopens a resumed session at its
-// defaults (agy #1460, measured on 1.5.14), so a resume that omits them re-applies these. LRU,
-// bounded like seenSessions in server.js; a restarted server starts empty.
+// defaults (agy #1460, measured on 1.5.14), so a resume that omits them re-applies these. A
+// restarted server starts empty.
 const sessionSettings = new Map();
-const SESSION_SETTINGS_CAP = 500;
-function rememberSettings(id, settings) {
-  sessionSettings.delete(id);
-  sessionSettings.set(id, settings);
-  if (sessionSettings.size > SESSION_SETTINGS_CAP) sessionSettings.delete(sessionSettings.keys().next().value);
-}
 
 export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
 
@@ -524,7 +518,7 @@ export async function runDelegate({
       // Saved once agy accepted them, with the model agy reports, so an effort set on agy's default
       // is tied to that model. A session run on agy's defaults is recorded too, as having none, so
       // its resume here does not read as a restart.
-      rememberSettings(sessionId, targetModel !== undefined || targetEffort !== undefined
+      sessionSettings.set(sessionId, targetModel !== undefined || targetEffort !== undefined
         ? { model: targetModel ?? servedModel, effort: targetEffort }
         : {});
       // What agy reported in force, never the requested value.
