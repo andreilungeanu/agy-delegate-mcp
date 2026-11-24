@@ -240,7 +240,7 @@ test("a cancel during the session/new retry wait ends the delegation without sen
     clientFactory: () => {
       const client = startupRaceFactory(sent, "1");
       const newSession = client.newSession.bind(client);
-      client.newSession = (...args) => newSession(...args).catch((err) => { ac.abort(); throw err; });
+      client.newSession = (...args) => newSession(...args).catch((err) => { setTimeout(() => ac.abort(), 500); throw err; });
       return client;
     },
   }));
