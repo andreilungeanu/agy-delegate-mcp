@@ -689,11 +689,13 @@ export async function runDelegate({
       if (resumeError) out.protocolWarnings = [`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`];
       return out;
     }
-    // A JSON-RPC code means agy rejected something (fix the arguments), not that the bridge broke
-    // (retry). -32000 is ACP's auth_required, sent by agy from session/new when signed out.
-    const reason = err?.reason || (err?.code === -32000 ? "not-signed-in" : typeof err?.code === "number" ? "agent-error" : undefined);
+    // A JSON-RPC code means agy answered with an error: a rejected argument (-32602) or a failure
+    // of its own (-32603). -32000 is ACP's auth_required, sent by agy from session/new when signed out.
+    const fromAgy = !err?.reason && typeof err?.code === "number";
+    const reason = err?.reason || (err?.code === -32000 ? "not-signed-in" : fromAgy ? "agent-error" : undefined);
     failure = { cause: err, reason, notes: [] };
     const { notes } = failure;
+    if (fromAgy) notes.push(` (${err.method ? `${err.method} ` : ""}JSON-RPC ${err.code})`);
     if (!err?.reason && err?.code === -32000) notes.push(". agy is not signed in: run agy once in a terminal and sign in, then retry.");
     // A bare duration cannot tell a wedged agent from a slow command, so name what was outstanding.
     const isTimeout = reason === "hard-cap" || reason === "idle-timeout";

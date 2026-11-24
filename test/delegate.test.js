@@ -175,6 +175,35 @@ test("runDelegate returns assembled result for a fresh session", async () => {
   assert.deepEqual(out.filesReportedByEditTools, ["hello.txt"]);
 });
 
+// The fake agent failing its first session/new requests, with each request counted off the wire.
+function startupRaceFactory(sent, failures) {
+  const client = new AcpClient({
+    spawnSpec: {
+      command: process.execPath,
+      args: [fileURLToPath(new URL("./fixtures/fake-acp.js", import.meta.url))],
+      options: { shell: false, env: { ...process.env, FAKE_ACP_NEW_SESSION_FAILURES: failures } },
+    },
+  });
+  const start = client.start.bind(client);
+  client.start = async (...args) => {
+    await start(...args);
+    const request = client.peer.request.bind(client.peer);
+    client.peer.request = (method, params) => { sent.push(method); return request(method, params); };
+  };
+  return client;
+}
+
+test("an error agy answers with names the request and its JSON-RPC code", async () => {
+  await assert.rejects(
+    runDelegate({ spec: "do the thing", workspace: process.cwd(), clientFactory: () => startupRaceFactory([], "1|database is locked") }),
+    (err) => {
+      assert.equal(err.reason, "agent-error");
+      assert.match(err.message, /^database is locked \(session\/new JSON-RPC -32603\)/);
+      return true;
+    },
+  );
+});
+
 // A cancel with no call in flight for it to reject: the wire's own refusal is all that keeps the
 // task prompt off it.
 test("a cancel landing after setup's last reply sends no task prompt", async () => {

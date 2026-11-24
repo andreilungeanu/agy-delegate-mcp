@@ -16,6 +16,10 @@ const DEFAULTS = { model: "gemini-4-neon", thought: "high", mode: "default" };
 // Separate ids, so tests of the bridge's per-session memory do not share one session.
 const sessions = new Map([["known-old", { cwd: "" }], ["known-other", { cwd: "" }], ["known-fresh", { cwd: "" }], ["known-late", { cwd: "" }]]);
 let counter = 0;
+// FAKE_ACP_NEW_SESSION_FAILURES=n[|message]: the first n session/new requests fail with -32603, as
+// agy's do when agy processes start at the same time.
+const [failCount, failMessage] = (process.env.FAKE_ACP_NEW_SESSION_FAILURES ?? "0").split("|");
+let newSessionFailures = Number(failCount);
 let state = { ...DEFAULTS };
 let cwd = process.cwd();
 
@@ -141,6 +145,10 @@ rl.on("line", (line) => {
         authMethods: [{ id: "oauth-personal", name: "Log in with Google" }],
       });
     case "session/new": {
+      if (newSessionFailures > 0) {
+        newSessionFailures--;
+        return fail(m, -32603, failMessage || "Failed to start Antigravity conversation");
+      }
       cwd = p.cwd || cwd;
       state = { ...DEFAULTS };
       const id = `sess-${++counter}`;
