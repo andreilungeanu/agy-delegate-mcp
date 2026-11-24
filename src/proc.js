@@ -123,12 +123,13 @@ function killGroupNow(child) {
  *   stop: (opts?: { timeoutMs?: number }) => Promise<boolean>,
  *   release: () => void,
  * }} TrackedChild
- * @typedef {{ child?: any, kill: (timeoutMs: number) => Promise<boolean>, killNow: () => void }} ChildKill
+ * @typedef {{ child?: any, kill: (timeoutMs: number) => Promise<boolean>, killNow: () => void, spent?: () => boolean }} ChildKill
  * @typedef {ReturnType<typeof createChildRegistry>} ChildRegistry
  */
 
-// The processes still to stop. An entry leaves once a stop saw its exit and its tree kill ended, or
-// its owner releases it; until then a second signal kills it, and after it its pid may be reused.
+// The processes still to stop. An entry leaves once a stop saw its exit and its tree kill ended, a
+// stop failed with nothing left to reach, or its owner releases it; until then a second signal kills
+// it, and after it its pid may be reused.
 export function createChildRegistry() {
   /** @type {Map<TrackedChild, ChildKill>} */
   const live = new Map();
@@ -144,6 +145,8 @@ export function createChildRegistry() {
       if (!kill) return null;
       /** @type {Promise<boolean> | null} */
       let stopping = null;
+      // What a stop reports once the entry has left.
+      let outcome = true;
       const attempt = (timeoutMs) => {
         try { return Promise.resolve(kill.kill(timeoutMs)).catch(() => false); } catch { return Promise.resolve(false); }
       };
@@ -151,10 +154,10 @@ export function createChildRegistry() {
       const entry = {
         child: kill.child,
         stop: ({ timeoutMs = KILL_WAIT_MS } = {}) => {
-          if (!live.has(entry)) return Promise.resolve(true);
+          if (!live.has(entry)) return Promise.resolve(outcome);
           stopping ??= attempt(timeoutMs).then((seen) => seen || attempt(timeoutMs)).then((seen) => {
             stopping = null;
-            if (seen) live.delete(entry);
+            if (seen || kill.spent?.()) { live.delete(entry); outcome = seen; }
             return seen;
           });
           return stopping;
@@ -194,6 +197,12 @@ export function spawnChild(command, args, options, { cwd, stdio }, registry = ch
     if (!launch) return null;
     const [file, argv] = spawnCommandLine(launch.command, launch.args, launch.options);
     const child = spawn(file, argv, { ...launch.options, ...(cwd ? { cwd } : {}), detached: DETACHED, stdio });
-    return { child, kill: (timeoutMs) => killAndSeeExit(child, timeoutMs), killNow: () => killGroupNow(child) };
+    // A launcher gone after a failed tree kill: no later kill reaches what it started.
+    return {
+      child,
+      kill: (timeoutMs) => killAndSeeExit(child, timeoutMs),
+      killNow: () => killGroupNow(child),
+      spent: () => unconfirmed.has(child) && !isChildAlive(child),
+    };
   });
 }
