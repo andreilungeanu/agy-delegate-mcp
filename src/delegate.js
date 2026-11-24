@@ -312,7 +312,6 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   handshakeMs?: number, hardCapMs?: number, timeoutMs?: number,
  *   onSessionReady?: (sessionId: string, client: any) => void,
  *   onPromptSent?: (sessionId: string, resumeNote?: string) => void,
- *   onUnseenExit?: (note: string) => void,
  *   onTurnEnd?: () => void,
  *   onProgress?: (message: string) => void,
  *   progressThrottleMs?: number, heartbeatMs?: number, signal?: AbortSignal,
@@ -324,7 +323,7 @@ export async function runDelegate({
   spec, mode = "agent", resumeSessionId, workspace,
   model, effort, contextFiles, clientFactory,
   handshakeMs, hardCapMs, timeoutMs,
-  onSessionReady, onPromptSent, onUnseenExit, onTurnEnd, onProgress, progressThrottleMs = 2000,
+  onSessionReady, onPromptSent, onTurnEnd, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
   sessionRetryMs = SESSION_RETRY_MS,
@@ -769,7 +768,6 @@ export async function runDelegate({
       // The result or the error is already decided; the note rides on whichever is going out.
       if (failure) failure.notes.push(` Note: ${note}`);
       else if (out) (out.protocolWarnings ??= []).push(note);
-      try { onUnseenExit?.(note); } catch {}
     }
   }
   // After teardown, so the exit note it adds is in the message.
