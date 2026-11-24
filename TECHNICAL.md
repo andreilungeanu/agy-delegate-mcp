@@ -130,6 +130,7 @@ diagnostic, not fail the call.
 | `src/model-options.js` | Thinking-level option resolution (`effort`). |
 | `src/proc.js` | Liveness check and process kill. |
 | `src/shutdown.js` | Stops every agent, then exits, when the host goes away. |
+| `src/tasks.js` | MCP tasks a `delegate` call is answered with. |
 | `src/errors.js` | Reason-tagged errors. |
 | `src/version.js` | Version read from `package.json`. |
 | `.claude-plugin/hooks.json`, `.claude-plugin/ensure-deps.mjs` | Claude/VS Code SessionStart dependency bootstrap. |
