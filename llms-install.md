@@ -39,7 +39,6 @@ Call the `doctor` tool. It reports the Node version and how `agy` resolves on PA
 
 | Variable | Purpose |
 | --- | --- |
-| `AGY_DELEGATE_IDLE_MS` | Mid-turn idle guard; unset or `0` = off. |
 | `AGY_DELEGATE_HARD_CAP_MS` | Absolute cap on a single delegation (default 6 h). |
 | `AGY_DELEGATE_HANDSHAKE_MS` | Handshake deadline (default 60 s). |
 | `AGY_DELEGATE_BACKGROUND_WAIT_MS` | Wait for a command agy moved to the background (default 10 min). |

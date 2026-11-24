@@ -327,7 +327,6 @@ test("runDoctor reports plugin version and ACP_LOG_SIZE default", async () => {
     assert.ok("ACP_AGENT_ARGS" in out.env);
     assert.ok("AGY_DELEGATE_HANDSHAKE_MS" in out.env);
     assert.ok("AGY_DELEGATE_HARD_CAP_MS" in out.env);
-    assert.ok("AGY_DELEGATE_IDLE_MS" in out.env);
     assert.ok("AGY_DELEGATE_BACKGROUND_WAIT_MS" in out.env);
   } finally {
     if (prev === undefined) delete process.env.ACP_LOG_SIZE;

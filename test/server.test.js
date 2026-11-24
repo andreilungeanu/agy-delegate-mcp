@@ -884,7 +884,6 @@ test("cancel force kills a real stub agent whose prompt never finishes", async (
       agent.prompt = (...a) => { const reply = prompt(...a); promptSent(); return reply; };
       return agent;
     },
-    idleMs: 0,          // no idle timeout — the stub streams steadily
     hardCapMs: 60000,   // far beyond the test, so the kill is what ends the turn
     handshakeMs: 10000,
   });

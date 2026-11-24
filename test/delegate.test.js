@@ -1532,27 +1532,6 @@ function hangingFactory({ emit, title, resumeFails } = {}) {
   };
 }
 
-// The advice must name the knob that fired: raising the hard cap does nothing when the
-// idle guard tripped.
-test("idle-timeout error advises AGY_DELEGATE_IDLE_MS, not the hard cap", async () => {
-  await assert.rejects(
-    () => runDelegate({
-      spec: "hang",
-      workspace: process.cwd(),
-      clientFactory: hangingFactory(),
-      handshakeMs: 10000,
-      idleMs: 300,
-      heartbeatMs: 0,
-    }),
-    (err) => {
-      assert.equal(err.reason, "idle-timeout");
-      assert.match(err.message, /raise AGY_DELEGATE_IDLE_MS/);
-      assert.ok(!/AGY_DELEGATE_HARD_CAP_MS/.test(err.message), "the hard cap is the wrong knob here");
-      return true;
-    }
-  );
-});
-
 test("timeout error names the turn and a resume that had already failed", async () => {
   await assert.rejects(
     () => runDelegate({
@@ -1633,8 +1612,7 @@ test("runDelegate reports a plan-mode edit via filesReportedByEditTools from its
 });
 
 test("a non-positive hard cap falls back to the default instead of firing instantly", async () => {
-  // Number("") is 0, so a blank env var used to arm a zero-length deadline that failed every
-  // call before the agent could answer. Only the idle guard gives 0 a meaning of its own.
+  // Number("") is 0, so a blank env var would arm a zero-length deadline that fails every call.
   const prev = process.env.AGY_DELEGATE_HARD_CAP_MS;
   process.env.AGY_DELEGATE_HARD_CAP_MS = "0";
   try {

@@ -6,27 +6,19 @@ export class SessionSupervisor {
   constructor(client, {
     handshakeMs = 60000,
     hardCapMs = DEFAULT_HARD_CAP_MS,
-    idleMs = 0,
   } = {}) {
     this.client = client;
     this.handshakeMs = handshakeMs;
     this.hardCapMs = hardCapMs;
-    // Opt-in: agy sends no frames while a shell command runs, so mid-turn silence says nothing
-    // about liveness.
-    this.idleMs = idleMs > 0 ? idleMs : 0;
     this.sessionId = null;
     this.lastActivityAt = Date.now();
-    this._idleTimer = null;
     this._handshakeTimer = null;
     this._hardCapTimer = null;
     this._armed = false;
     this._settled = false;
     this._promptStarted = false;
     this._guardReject = null;
-    this._onActivity = () => {
-      this.lastActivityAt = Date.now();
-      this._resetIdle();
-    };
+    this._onActivity = () => { this.lastActivityAt = Date.now(); };
     this._onSetupCancel = () => this._trip("cancelled-in-setup", "cancelled before the prompt was sent");
     this._onExit = (info) => {
       this._trip(
@@ -70,7 +62,6 @@ export class SessionSupervisor {
     this._promptStarted = true;
     clearTimeout(this._handshakeTimer);
     this._handshakeTimer = null;
-    this._resetIdle();
   }
 
   disarm() {
@@ -79,21 +70,10 @@ export class SessionSupervisor {
     this.client.off("activity", this._onActivity);
     this.client.off("exit", this._onExit);
     this.client.off("cancelled-in-setup", this._onSetupCancel);
-    clearTimeout(this._idleTimer);
     clearTimeout(this._handshakeTimer);
     clearTimeout(this._hardCapTimer);
-    this._idleTimer = null;
     this._handshakeTimer = null;
     this._hardCapTimer = null;
-  }
-
-  _resetIdle() {
-    clearTimeout(this._idleTimer);
-    this._idleTimer = null;
-    if (!this.idleMs || !this._promptStarted || !this._armed || this._settled) return;
-    this._idleTimer = setTimeout(() => {
-      this._trip("idle-timeout", `Session idle timeout after ${this.idleMs}ms`);
-    }, this.idleMs);
   }
 
   abort() {
@@ -105,7 +85,7 @@ export class SessionSupervisor {
     this._settled = true;
     this.disarm();
     const err = makeError(reason, message);
-    if (reason === "idle-timeout" || reason === "handshake-timeout" || reason === "hard-cap" || reason === "aborted") {
+    if (reason === "handshake-timeout" || reason === "hard-cap" || reason === "aborted") {
       if (this.sessionId) { try { this.client.cancel(this.sessionId); } catch {} }
     }
     // Closed whether or not a session opened, so setup orphaned by this trip cannot still prompt.

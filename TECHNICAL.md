@@ -48,7 +48,7 @@ before the tool runs.
 | `env.ACP_LOG_SIZE` | Flight recorder size (default `2000`). |
 | `env.ACP_AGENT_COMMAND` / `env.ACP_AGENT_ARGS` | Launcher overrides, or `null` when unset. |
 | `env.AGY_DELEGATE_TRANSCRIPT` | Transcript frame count, or `null` when unset. |
-| `env.AGY_DELEGATE_HANDSHAKE_MS` / `HARD_CAP_MS` / `IDLE_MS` / `BACKGROUND_WAIT_MS` | Timeout knobs, or `null` when unset. |
+| `env.AGY_DELEGATE_HANDSHAKE_MS` / `HARD_CAP_MS` / `BACKGROUND_WAIT_MS` | Timeout knobs, or `null` when unset. |
 
 Optional `deep: true` runs a bounded ACP handshake (15 s) and adds `agent.handshake`:
 `{ ok: false, error }` on failure — not signed in, or a timeout — or `{ ok: true,
@@ -113,7 +113,6 @@ diagnostic, not fail the call.
 | `AGY_DELEGATE_TRANSCRIPT` | Frames of raw ACP transcript to append to failure messages; unset = none. Contains prompts, tool inputs/outputs and agent messages — use it only when debugging the bridge itself. |
 | `AGY_DELEGATE_HANDSHAKE_MS` | Handshake deadline (default 60 s). |
 | `AGY_DELEGATE_HARD_CAP_MS` | Absolute delegation cap (default 6 h). |
-| `AGY_DELEGATE_IDLE_MS` | Opt-in mid-turn idle guard; unset or `0` = off. |
 | `AGY_DELEGATE_BACKGROUND_WAIT_MS` | How long to wait for a command agy moved to the background (default 10 min). |
 | `ACP_E2E` | Set to `1` to run the live e2e tests locally; they spend agy quota. |
 
@@ -127,7 +126,7 @@ diagnostic, not fail the call.
 | `src/request-router.js` | Permission request routing. |
 | `src/jsonrpc.js` | NDJSON JSON-RPC peer. |
 | `src/spawn.js` | `agy acp` launcher resolution. |
-| `src/session-supervisor.js` | Handshake/idle/hard-cap timeouts. |
+| `src/session-supervisor.js` | Handshake and hard-cap timeouts. |
 | `src/agent-reported-files.js` | Path normalization for `filesReportedByEditTools`. |
 | `src/doctor.js` | Diagnostics. |
 | `src/turn-state.js` | Per-turn accumulation, artifacts, and the `reset()` declaration. |

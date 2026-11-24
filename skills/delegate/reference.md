@@ -89,7 +89,6 @@ Errors come back as `delegate failed [<reason>]: …`.
 | `resume-failed` | `resumeSessionId` could not be resumed, and agy still lists that session (or its session list could not be read) — no fresh session was started. | Retry; omit `resumeSessionId` to start fresh deliberately. A session agy does not have is not this: it starts fresh and reports a `protocolWarnings` entry. |
 | `agent-error` | agy answered a request with a JSON-RPC error, named with its code. | Read the message; fix the argument if it names one. |
 | `hard-cap` | The 6h absolute cap elapsed. | Resume the id in the message. |
-| `idle-timeout` | Opt-in mid-turn idle guard tripped (off by default). | Resume the id in the message. |
 | `spawn-failed` | The agent process could not be started at all (launcher missing or not executable). | Install the Antigravity CLI and sign in by running `agy` once; `doctor` shows the launcher resolution. |
 | `not-signed-in` | agy has no stored sign-in and rejected the session (ACP `-32000`, "Authentication required"). Nothing was prompted. | Ask the user to run `agy` once in a terminal and sign in, then retry. |
 | `agent-exit` | The agent process died; stderr is included. | Resume once; run `doctor` if it repeats. |
@@ -138,12 +137,10 @@ acting on it.
 | ----- | ------- | ----- |
 | Handshake deadline | 60 s | Spawn through session setup only, where silence really does mean a wedged agent. |
 | Hard cap | 6 h | Whole delegation, absolute. |
-| Mid-turn idle guard | off | Opt-in; silence during a turn does not settle the session. |
 | Background wait | 10 min | agy moves a shell command that outlasts the wait it set for it (`WaitMsBeforeAsync`) to the background and ends the turn. The bridge keeps agy running until the command finishes and agy reports on it, then returns that report. |
 
-Overrides: `AGY_DELEGATE_HANDSHAKE_MS`, `AGY_DELEGATE_HARD_CAP_MS`, `AGY_DELEGATE_BACKGROUND_WAIT_MS`,
-`AGY_DELEGATE_IDLE_MS` (unset or `0` = disabled). On the other three, a non-positive or malformed value falls back to the
-default. Agent process exit is detected directly and fails fast regardless of these.
+Overrides: `AGY_DELEGATE_HANDSHAKE_MS`, `AGY_DELEGATE_HARD_CAP_MS`, `AGY_DELEGATE_BACKGROUND_WAIT_MS`.
+A non-positive or malformed value falls back to the default. Agent process exit is detected directly and fails fast regardless of these.
 
 A delegation is still cancellable at any time via the `cancel` tool or a host interrupt.
 

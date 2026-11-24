@@ -29,7 +29,7 @@ const ASK_PREAMBLE = "Answer the question below. Do not edit files or run comman
 export const DEFAULT_HEARTBEAT_MS = 30000;
 
 // A malformed or non-positive value falls back to the default, so a blank var (Number("") is 0)
-// cannot arm a zero-length deadline. The idle guard's 0 is its fallback, not an env value.
+// cannot arm a zero-length deadline.
 function envMs(name, fallback) {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
@@ -309,7 +309,7 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   spec?: string, mode?: string, resumeSessionId?: string, workspace?: string,
  *   model?: string, effort?: string,
  *   contextFiles?: string[], clientFactory?: (opts: any) => any,
- *   idleMs?: number, handshakeMs?: number, hardCapMs?: number, timeoutMs?: number,
+ *   handshakeMs?: number, hardCapMs?: number, timeoutMs?: number,
  *   onSessionReady?: (sessionId: string, client: any) => void,
  *   onPromptSent?: (sessionId: string, resumeNote?: string) => void,
  *   onUnseenExit?: (note: string) => void,
@@ -323,7 +323,7 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
 export async function runDelegate({
   spec, mode = "agent", resumeSessionId, workspace,
   model, effort, contextFiles, clientFactory,
-  idleMs, handshakeMs, hardCapMs, timeoutMs,
+  handshakeMs, hardCapMs, timeoutMs,
   onSessionReady, onPromptSent, onUnseenExit, onTurnEnd, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
@@ -349,12 +349,11 @@ export async function runDelegate({
   const promptText = mode === "ask" ? `${ASK_PREAMBLE}\n\n${spec}` : spec;
   const capMs = hardCapMs ?? timeoutMs ?? envMs("AGY_DELEGATE_HARD_CAP_MS", DEFAULT_HARD_CAP_MS);
   const shakeMs = handshakeMs ?? envMs("AGY_DELEGATE_HANDSHAKE_MS", DEFAULT_HANDSHAKE_MS);
-  const turnIdleMs = idleMs ?? envMs("AGY_DELEGATE_IDLE_MS", 0);
   const state = makeTurnState({ onProgress, progressThrottleMs });
 
   const make = clientFactory || ((opts) => new AcpClient(opts));
   const client = make({ cwd: workspace });
-  const supervisor = new SessionSupervisor(client, { idleMs: turnIdleMs, handshakeMs: shakeMs, hardCapMs: capMs });
+  const supervisor = new SessionSupervisor(client, { handshakeMs: shakeMs, hardCapMs: capMs });
   const onAbort = () => supervisor.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
   // agy takes the next prompt as its open question's answer, and can leave the call open. Closed as
@@ -722,7 +721,7 @@ export async function runDelegate({
     if (fromAgy) notes.push(rpcNote(err));
     if (!err?.reason && err?.code === -32000) notes.push(". agy is not signed in: run agy once in a terminal and sign in, then retry.");
     // A bare duration cannot tell a wedged agent from a slow command, so name what was outstanding.
-    const isTimeout = reason === "hard-cap" || reason === "idle-timeout";
+    const isTimeout = reason === "hard-cap";
     // A handshake timeout gets the forensics but not the long-command advice: no prompt was sent.
     const isStall = isTimeout || reason === "handshake-timeout";
     // Not on an abort: a cancelled request gets no response, and a cancelled task keeps its own
@@ -738,10 +737,8 @@ export async function runDelegate({
     if (resumeError) notes.push(` Note: ${resumeNote()}`);
     if (sessionId) notes.push(` Resume with resumeSessionId ${sessionId}.`);
     if (isTimeout) {
-      // Name the knob that fired: the hard cap does not govern an idle-timeout.
-      const knob = reason === "idle-timeout" ? "AGY_DELEGATE_IDLE_MS" : "AGY_DELEGATE_HARD_CAP_MS";
       notes.push(" agy does not stream shell output over ACP, so a long-running command emits"
-        + ` nothing until it exits. Split the command, run it in the background and poll, or raise ${knob}.`);
+        + " nothing until it exits. Split the command, run it in the background and poll, or raise AGY_DELEGATE_HARD_CAP_MS.");
     }
     // Opt-in: raw frames help only when debugging the bridge, and cost the caller context.
     const frames = transcriptFrames();
@@ -761,7 +758,7 @@ export async function runDelegate({
     try { supervisor.finish(); } catch {}
     // Graceful after a completed turn, so agy closes its conversation database; a stall, abort or
     // exit is killed at once.
-    const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failure?.reason);
+    const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "aborted", "agent-exit"].includes(failure?.reason);
     let exited = false;
     // Awaited, so agy has exited when the caller gets the result, or a warning says the exit was not
     // seen; otherwise agy holds the workspace as its cwd (deleting it fails with EBUSY on Windows).
