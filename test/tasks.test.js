@@ -103,10 +103,10 @@ test("a finished task drops its last progress line, and a failed one says why", 
   assert.equal(store.view(failed).statusMessage, "boom");
 });
 
-test("a cancelled task names a resume that fell back and an agent the stop did not see exit, not the run's error", async () => {
+test("a cancelled task names a resume that fell back and an agent the stop could not confirm exited, not the run's error", async () => {
   const store = createTaskStore();
   const fellBack = "resuming sess-old had already failed (agy has no session sess-old), so this ran as a fresh session and none of that earlier work was in context.";
-  const unseen = "the bridge stopped agy (pid 7) but did not see agy exit; it may still be running.";
+  const unseen = "the bridge stopped agy (pid 7) but could not confirm that agy and its processes exited; they may still be running.";
   let end;
   let reportUnseen = (_note) => {};
   const answer = await runAsTask({

@@ -2304,7 +2304,7 @@ test("an agent that does not exit after the stop is reported", async () => {
   assert.ok(out.protocolWarnings?.some((w) => /could not confirm that agy and its processes exited/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
-test("a stop that rejects is reported like one that did not see the exit", async () => {
+test("a stop that rejects is reported like one that could not confirm the exit", async () => {
   let stops = 0;
   const out = await runDelegate({
     spec: "task", workspace: process.cwd(),
