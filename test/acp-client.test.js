@@ -175,7 +175,7 @@ test("start() rejects a failed spawn with reason spawn-failed", async () => {
   client.stop();
 });
 
-test("stop() terminates a live agent child (regression: Windows orphaned agent)", async () => {
+test("stop() kills a live agent", async () => {
   const client = new AcpClient({
     spawnSpec: {
       command: process.execPath,
