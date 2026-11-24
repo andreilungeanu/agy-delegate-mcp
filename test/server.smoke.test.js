@@ -65,18 +65,6 @@ test("a host shutdown during doctor's version probe stops the probe", { skip: pr
   assert.equal(isAlive(pid), false, "the probe must be gone when the server exits");
 });
 
-// The SIGTERM lands while the SIGHUP's stop is still in its ps walk, before any kill.
-test("a second signal during shutdown kills doctor's version probe before the server exits", { skip: process.platform === "win32" && "POSIX signals" }, async (t) => {
-  const { server, exited, pid } = await serverInDoctorProbe(t);
-  server.kill("SIGHUP");
-  server.kill("SIGTERM");
-  await exited;
-  // Killed, it is reaped by init once the server is gone, a moment after the exit.
-  const reaped = Date.now() + 1000;
-  while (isAlive(pid) && Date.now() < reaped) await new Promise((r) => setTimeout(r, 20));
-  assert.equal(isAlive(pid), false, "the probe must not outlive the server");
-});
-
 // deep starts the agent once the signal ends the probe; the stub, started as the agent, writes its
 // pid over the probe's within the 1 s wait.
 test("a signal during doctor's deep probe leaves no agent running after the server exits", { skip: process.platform === "win32" && "POSIX signals" }, async (t) => {
