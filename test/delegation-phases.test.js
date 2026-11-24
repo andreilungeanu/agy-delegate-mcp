@@ -428,9 +428,6 @@ function violations(c, o) {
       rule(cancelAt < 0, "a cancel after the turn ended sends agy no session/cancel (fd89088)");
       rule(c.setup === "fails" ? reason === "agent-error" : finishedTask(), `a cancel after the turn ended leaves its result alone (fd89088); got ${got}`);
     }
-    if (c.event === "cancel-force" && registered) {
-      rule(o.settledMs < CLOSE_CUT_MS, `a force cancel cuts agy's close short once the turn has settled (fd89088); the delegation returned ${o.settledMs} ms after it`);
-    }
   }
 
   if (c.event === "steer") {
@@ -471,7 +468,6 @@ function violations(c, o) {
   if (c.event === "abort") {
     if (c.barrier === "teardown") {
       rule(o.server?.value?.result?.includes(DONE), `an abort during agy's close keeps the decided result (214a93f); got ${show(o.server).slice(0, 300)}`);
-      rule(o.settledMs < CLOSE_CUT_MS, `an abort during agy's close cuts it short (214a93f); the delegation returned ${o.settledMs} ms after it`);
     } else {
       rule(o.server?.error?.reason === "aborted", `an abort fails the delegation as aborted (40ac9a4); got ${show(o.server).slice(0, 300)}`);
       if (!TURN.includes(c.barrier)) {

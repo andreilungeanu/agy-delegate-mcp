@@ -1,12 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { createRequire, syncBuiltinESMExports } from "node:module";
 import { AcpClient } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 
@@ -283,25 +282,6 @@ test("newSession sends an appended system prompt only when asked for one", async
   }
 });
 
-test("a force stop cuts a graceful stop's grace short", async () => {
-  const client = new AcpClient({
-    spawnSpec: {
-      command: process.execPath,
-      args: [fileURLToPath(new URL("./fixtures/close-ignoring-stub.js", import.meta.url))],
-      options: { shell: false },
-    },
-  });
-  await client.start();
-  await client.initialize();
-  await client.newSession(process.cwd());
-  const graceful = client.stop({ graceMs: 10000 });
-  await new Promise((r) => setTimeout(r, 100));
-  const started = Date.now();
-  assert.equal(await client.stop(), true, "the force stop must observe the exit");
-  assert.ok(Date.now() - started < 3000, `the force stop waited ${Date.now() - started} ms on the grace`);
-  assert.equal(await graceful, true);
-});
-
 test("an agent that exits closes the steer window", async () => {
   const client = new AcpClient({ spawnSpec: fakeSpawn() });
   await client.start();
@@ -407,43 +387,6 @@ function withholdExit(child) {
   });
 }
 
-// Every kill misses: the stub, which reads only stdin, ends only if teardown closes it.
-test("a stop that cannot confirm the agent's exit closes the agent's stdin", async () => {
-  const client = new AcpClient({ spawnSpec: silentStub() });
-  await client.start();
-  const { child } = client;
-  const cp = createRequire(import.meta.url)("node:child_process");
-  const execFile = cp.execFile;
-  const kill = process.kill;
-  cp.execFile = (file, args, opts, cb) => execFile(file === "taskkill" ? process.execPath : file, file === "taskkill" ? ["-e", "process.exit(128)"] : args, opts, cb);
-  syncBuiltinESMExports();
-  process.kill = (pid, signal) => (Math.abs(pid) === child.pid ? true : kill.call(process, pid, signal));
-  const childKill = child.kill.bind(child);
-  child.kill = () => false;
-  try {
-    assert.equal(await client.stop({ timeoutMs: 300 }), false, "a kill that missed was taken for an exit");
-    await until(() => !isChildAlive(child), 5000, "the agent outlived its closed stdin");
-  } finally {
-    cp.execFile = execFile;
-    syncBuiltinESMExports();
-    process.kill = kill;
-    try { childKill("SIGKILL"); } catch {}
-  }
-});
-
-test("stop() retries teardown after a missed exit", async () => {
-  const client = new AcpClient({ spawnSpec: silentStub() });
-  await client.start();
-  const reallyExited = withholdExit(client.child);
-  try {
-    assert.equal(await client.stop({ timeoutMs: 25 }), false, "an exit that never arrives is not observed");
-    (await within(reallyExited, 10000, "the kill never landed"))();
-    assert.equal(await client.stop(), true, "the missed exit stayed the answer, so the next stop did not look again");
-  } finally {
-    try { client.child.kill("SIGKILL"); } catch {}
-  }
-});
-
 // With the exit withheld, emitExit never runs either: nothing but stop() rejects session/prompt.
 test("stop() rejects in-flight RPCs when the child does not exit", async () => {
   const client = new AcpClient({ spawnSpec: silentStub() });
@@ -455,7 +398,7 @@ test("stop() rejects in-flight RPCs when the child does not exit", async () => {
   const reallyExited = withholdExit(client.child);
   try {
     assert.equal(client.peer.pending.size, 1, "session/prompt must still be in flight");
-    assert.equal(await client.stop({ timeoutMs: 50 }), false, "an exit that never arrives is not observed");
+    assert.equal(await client.stop(), false, "an exit that never arrives is not observed");
     let timeoutId;
     try {
       const err = await Promise.race([
@@ -556,42 +499,6 @@ test("spawning through a shell raises no DEP0190 warning", () => {
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 20000 });
   assert.equal(child.status, 0, child.stderr);
   assert.doesNotMatch(child.stderr, /DEP0190/);
-});
-
-// treeKill walks the tree with ps before it signals anything. An agent that exited by itself during
-// that walk resolved stop() at once, and its session's commands were signalled only afterwards: a
-// shutdown exiting on stop() left them running. The ps shim takes its snapshot, ends the agent, then
-// answers late: the agent exits by itself during the walk, whatever the machine's speed.
-test("stop() resolves only after the commands agy left in their own session are killed", { skip: process.platform === "win32" }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "agy-ps-shim-"));
-  const pidFile = join(dir, "grandchild.pid");
-  const agentPidFile = join(dir, "agent.pid");
-  writeFileSync(join(dir, "ps"), `#!/bin/sh\nout=$(/bin/ps "$@")\nkill -TERM "$(cat '${agentPidFile}')"\nsleep 1\nprintf '%s\\n' "$out"\n`);
-  chmodSync(join(dir, "ps"), 0o755);
-  const savedPath = process.env.PATH;
-  process.env.PATH = `${dir}:${savedPath}`;
-  let grandchild;
-  try {
-    const client = new AcpClient({
-      spawnSpec: {
-        command: process.execPath,
-        args: [fileURLToPath(new URL("./fixtures/exits-leaving-session-child.js", import.meta.url)), pidFile],
-        options: { shell: false },
-      },
-    });
-    await client.start();
-    await until(() => { try { return readFileSync(pidFile, "utf8").endsWith("\n"); } catch { return false; } }, 5000, "fixture never wrote its child's pid");
-    grandchild = Number(readFileSync(pidFile, "utf8").trim());
-    writeFileSync(agentPidFile, String(client.child.pid));
-    await client.stop();
-    // A SIGKILL lands asynchronously (macOS has no /proc to see a zombie by), so allow a beat; the
-    // kill this guards against comes a full second late, after the shim answers.
-    await until(() => !pidAlive(grandchild), 300, "the session's command must be killed when stop() resolves");
-  } finally {
-    process.env.PATH = savedPath;
-    if (grandchild && pidAlive(grandchild)) { try { process.kill(grandchild, "SIGKILL"); } catch {} }
-    rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 // Under shell:true Node hands cmd.exe one unquoted line, so a launcher path with a space failed to

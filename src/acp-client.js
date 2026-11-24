@@ -3,7 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 import { JsonRpcPeer } from "./jsonrpc.js";
 import { createRequestRouter } from "./request-router.js";
 import { resolveAcpSpawn } from "./spawn.js";
-import { children, isChildAlive, spawnChild } from "./proc.js";
+import { children, isChildAlive, spawnChild, stopChild } from "./proc.js";
 import { VERSION } from "./version.js";
 import { makeError } from "./errors.js";
 
@@ -46,8 +46,8 @@ export class AcpClient extends EventEmitter {
     super();
     this.spawnSpec = spawnSpec || resolveAcpSpawn();
     this.registry = registry;
-    /** @type {import("./proc.js").TrackedChild | null} */
-    this._tracked = null;
+    /** @type {any} */
+    this._child = null;
     // agy treats its process directory as part of the workspace: started elsewhere, it ran git
     // status there (measured, agy 1.5.14).
     this.cwd = cwd;
@@ -64,7 +64,7 @@ export class AcpClient extends EventEmitter {
     this._steers = [];
   }
 
-  get child() { return this._tracked?.child; }
+  get child() { return this._child; }
 
   // The stderr tail an exit error quotes; not counted as activity. Kept as chunks and joined on
   // read, which is cheap for a noisy agent; the StringDecoder keeps split UTF-8 characters whole.
@@ -75,11 +75,11 @@ export class AcpClient extends EventEmitter {
 
   async start() {
     const { command, args, options } = this.spawnSpec;
-    const tracked = spawnChild(command, args, options, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"] }, this.registry);
-    if (!tracked) {
+    const child = spawnChild(command, args, options, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"] }, this.registry);
+    if (!child) {
       throw makeError("spawn-failed", `Failed to spawn agent (${command}): not found on PATH. Install the Antigravity CLI (agy) and sign in by running agy once.`);
     }
-    this._tracked = tracked;
+    this._child = child;
     this._stderrChunks = [];
     this._stderrLength = 0;
     const stderrDecoder = new StringDecoder("utf8");
@@ -237,21 +237,12 @@ export class AcpClient extends EventEmitter {
 
   getTranscript(n) { return this.peer ? this.peer.formatLog(n) : ""; }
 
-  // graceMs > 0 first closes the sessions and stdin and waits that long: agy then exits 0 in
-  // 200–400 ms with its database closed, where a kill leaves -shm and -wal files (measured, agy
-  // 1.5.14). A force stop ends a grace in progress.
-  /** @param {{ timeoutMs?: number, graceMs?: number }} [opts] */
-  stop({ timeoutMs, graceMs = 0 } = {}) {
-    if (this._stopping && graceMs <= 0) this._endGrace?.();
-    if (!this._stopping) {
-      this._stopping = this._teardown(timeoutMs, graceMs).then((observed) => {
-        if (!observed) this._stopping = null;
-        return observed;
-      }, (err) => {
-        this._stopping = null;
-        throw err;
-      });
-    }
+  // One stop per client, which every caller joins. graceMs > 0 first closes the sessions and stdin
+  // and waits that long: agy then exits 0 in 200–400 ms with its database closed, where a kill leaves
+  // -shm and -wal files (measured, agy 1.5.14).
+  /** @param {{ graceMs?: number }} [opts] */
+  stop({ graceMs = 0 } = {}) {
+    this._stopping ??= this._teardown(graceMs);
     return this._stopping;
   }
 
@@ -260,11 +251,7 @@ export class AcpClient extends EventEmitter {
   async _closeGracefully(child, graceMs) {
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
-    const deadline = new Promise((resolve) => {
-      timer = setTimeout(resolve, graceMs);
-      /** @type {(() => void) | null} */
-      this._endGrace = () => resolve(undefined);
-    });
+    const deadline = new Promise((resolve) => { timer = setTimeout(resolve, graceMs); });
     const exited = new Promise((resolve) => child.once("exit", resolve));
     try {
       if (this.agentCapabilities?.sessionCapabilities?.close && this.peer) {
@@ -275,27 +262,20 @@ export class AcpClient extends EventEmitter {
       await Promise.race([deadline, exited]);
     } finally {
       clearTimeout(timer);
-      this._endGrace = null;
     }
   }
 
-  async _teardown(timeoutMs, graceMs = 0) {
-    const tracked = this._tracked;
-    if (!tracked) {
+  async _teardown(graceMs) {
+    const child = this._child;
+    if (!child) {
       try { this.peer?.close(); } catch {}
       return true;
     }
-    const { child } = tracked;
     if (graceMs > 0 && isChildAlive(child)) await this._closeGracefully(child, graceMs);
-    const observed = await tracked.stop({ timeoutMs });
+    const observed = await stopChild(child);
     // On an exit, emitExit rejects pending RPCs with stderr; rejecting here first would lose it.
-    // Only an unobserved exit settles them here.
-    if (!observed && this._phase !== "exited" && isChildAlive(child)) {
-      try {
-        this.peer?.rejectAllPending(makeError("agent-exit", "agent process did not exit after stop"));
-      } catch {}
-      // agy ends on stdin EOF, which may still stop an agy the kill missed.
-      try { child.stdin?.end(); } catch {}
+    if (isChildAlive(child)) {
+      try { this.peer?.rejectAllPending(makeError("agent-exit", "agent process did not exit after stop")); } catch {}
     }
     try { this.peer?.close(); } catch {}
     return observed;

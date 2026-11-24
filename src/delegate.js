@@ -762,15 +762,10 @@ export async function runDelegate({
     // Graceful after a completed turn, so agy closes its conversation database; a stall, abort or
     // exit is killed at once.
     const killNow = signal?.aborted || ["handshake-timeout", "hard-cap", "idle-timeout", "aborted", "agent-exit"].includes(failure?.reason);
-    // A host abort during the close is still an abort: a force stop ends the grace and kills.
-    const abortClose = () => { Promise.resolve(client.stop()).catch(() => {}); };
-    signal?.addEventListener("abort", abortClose, { once: true });
     let exited = false;
     // Awaited, so agy has exited when the caller gets the result, or a warning says the exit was not
     // seen; otherwise agy holds the workspace as its cwd (deleting it fails with EBUSY on Windows).
-    // The handle stays registered meanwhile, so a force cancel can cut the grace short.
     try { exited = await client.stop({ graceMs: killNow ? 0 : GRACEFUL_STOP_MS }); } catch {}
-    finally { signal?.removeEventListener("abort", abortClose); }
     if (exited === false) {
       const pid = client.child?.pid;
       const note = `the bridge stopped agy${pid ? ` (pid ${pid})` : ""} but could not confirm that agy and its processes exited; they may still be running.`;

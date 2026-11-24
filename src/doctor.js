@@ -2,13 +2,12 @@ import process from "node:process";
 import { existsSync } from "node:fs";
 import { AcpClient, GRACEFUL_STOP_MS } from "./acp-client.js";
 import { commandExists, resolveAcpSpawn } from "./spawn.js";
-import { children, spawnChild } from "./proc.js";
+import { children, spawnChild, stopChild } from "./proc.js";
 import { readPackageVersion } from "./version.js";
 import { allowedValues, describeOptions } from "./model-options.js";
 
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
-const PROBE_STDOUT_CAP = 64 * 1024;
 const DEFAULT_LOG_SIZE = "2000";
 
 function formatArg(value) {
@@ -51,58 +50,34 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
   // Interrupted already, or shutting down: nothing is spawned, and found comes from the lookup alone.
   const notRun = (error) => Promise.resolve({ found: isJsScript ? existsSync(launcher) : commandExists(launcher, options?.env), version: null, error });
   if (signal?.aborted) return notRun(aborted.error);
-  let probe;
+  let child;
   try {
-    probe = spawnChild(execCommand, execArgs, options, { stdio: ["ignore", "pipe", "pipe"] }, registry);
+    child = spawnChild(execCommand, execArgs, options, { stdio: ["ignore", "pipe", "pipe"] }, registry);
   } catch (err) {
     return notRun(err.message);
   }
-  if (!probe) return Promise.resolve({ found: false, version: null });
-  const { child } = probe;
+  if (!child) return Promise.resolve({ found: false, version: null });
   return new Promise((resolve) => {
-    let settled = false;
     let stdout = "";
-    let timer;
-    let onAbort;
-    let abortRequested = false;
     const finish = (result) => {
-      if (settled) return;
-      settled = true;
       clearTimeout(timer);
-      if (onAbort) signal?.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
       resolve(result);
     };
-    // Capped: a version is one line.
-    child.stdout?.on("data", (chunk) => {
-      if (stdout.length < PROBE_STDOUT_CAP) stdout += chunk.toString();
-    });
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
     // Drained: a full pipe blocks a noisy launcher, which would then read as a timeout.
-    child.stderr?.on("data", () => {});
-    child.stderr?.on("error", () => {});
+    child.stderr.on("data", () => {});
+    child.stderr.on("error", () => {});
     child.on("error", () => finish({ found: false, version: null }));
-    child.on("close", (code) => {
-      // Closed: its pid may be reused, so no later stop may kill it.
-      probe.release();
-      if (abortRequested) return;
-      const version = code === 0 ? stdout.trim() || null : null;
-      finish({
-        found: true,
-        version,
-        ...(code !== 0 ? { error: `version probe exited ${code}` } : {}),
-      });
-    });
-    timer = setTimeout(() => {
-      // Not awaited, so the timeout returns on time; the probe stays tracked until its stop settles.
-      probe.stop();
-      // It spawned, so it is installed; it did not answer.
+    child.on("close", (code) => finish(code === 0 ? { found: true, version: stdout.trim() || null } : { found: true, version: null, error: `version probe exited ${code}` }));
+    // It spawned, so it is installed; it did not answer.
+    const timer = setTimeout(() => {
+      stopChild(child);
       finish({ found: true, version: null, error: `version probe timed out after ${timeoutMs}ms` });
     }, timeoutMs);
-    timer.unref?.();
-    onAbort = () => {
-      // The timeout would otherwise still fire during the kill and return first.
-      clearTimeout(timer);
-      abortRequested = true;
-      probe.stop().then(() => finish({ found: true, ...aborted }));
+    const onAbort = () => {
+      stopChild(child);
+      finish({ found: true, ...aborted });
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });

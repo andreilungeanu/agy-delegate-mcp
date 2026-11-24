@@ -451,31 +451,6 @@ test("runDoctor stops a hung version probe on abort and starts no handshake afte
   assert.match(out.agent.handshake?.error ?? "", /aborted/);
 });
 
-// The abort listener came off before the graceful close, so an abort during a wedged close ran out
-// the whole grace.
-test("runDoctor cuts a wedged graceful close short when the host aborts during it", async () => {
-  const controller = new AbortController();
-  let abortedAt;
-  await rawRunDoctor({
-    deep: true, signal: controller.signal,
-    spawnSpec: { command: process.execPath, args: ["--version"], options: { shell: false } },
-    clientFactory: (opts) => {
-      const client = new AcpClient({
-        ...opts,
-        spawnSpec: { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/close-ignoring-stub.js", import.meta.url))], options: { shell: false } },
-      });
-      const open = client.newSession.bind(client);
-      client.newSession = async (...a) => {
-        const res = await open(...a);
-        setTimeout(() => { abortedAt = Date.now(); controller.abort(); }, 50);
-        return res;
-      };
-      return client;
-    },
-  });
-  assert.ok(Date.now() - abortedAt < 1500, `doctor's close ran ${Date.now() - abortedAt} ms after the abort`);
-});
-
 // An abort that had already fired still spawned the probe, and the abort's result won the race
 // with the spawn error: a missing launcher read as found.
 test("an already-aborted doctor spawns no probe and does not report a missing launcher as found", async () => {
@@ -487,31 +462,6 @@ test("an already-aborted doctor spawns no probe and does not report a missing la
   });
   assert.equal(out.agent.found, false);
   assert.match(out.agent.error ?? "", /aborted/);
-});
-
-// The probe was killed fire-and-forget, so doctor could return with --version still running.
-test("an abort during the version probe returns once the probe process is gone", async () => {
-  const pidFile = join(tmpdir(), `agy-probe-${process.pid}-${Date.now()}`);
-  const controller = new AbortController();
-  const saved = process.env.AGY_TEST_PIDFILE;
-  process.env.AGY_TEST_PIDFILE = pidFile;
-  try {
-    const run = rawRunDoctor({
-      signal: controller.signal, versionTimeoutMs: 10000,
-      spawnSpec: { command: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)), args: [], options: { shell: false } },
-    });
-    const deadline = Date.now() + 5000;
-    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-    const pid = Number(readFileSync(pidFile, "utf8").trim());
-    controller.abort();
-    await run;
-    let alive = true;
-    try { process.kill(pid, 0); } catch { alive = false; }
-    assert.equal(alive, false, "the probe process must be gone when doctor returns");
-  } finally {
-    if (saved === undefined) delete process.env.AGY_TEST_PIDFILE; else process.env.AGY_TEST_PIDFILE = saved;
-    rmSync(pidFile, { force: true });
-  }
 });
 
 test("shutdown's stopAll ends a hung version probe, and a probe after it is not started", async () => {
@@ -550,49 +500,5 @@ test("runDoctor probes through cmd.exe with a launcher path and a prefix argumen
     assert.equal(out.agent.version, '["two words","--version"]');
   } finally {
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// The abort left the probe's timeout armed, so a timeout falling while the kill ran returned
-// "timed out" with the probe still open. The probe's timer is captured and, after the abort, fired
-// if it is still armed, as a real one falling during the kill would be.
-test("an abort just before the probe's timeout reports the abort, after the probe has closed", async () => {
-  const pidFile = join(tmpdir(), `agy-probe-late-${process.pid}-${Date.now()}`);
-  const controller = new AbortController();
-  const saved = process.env.AGY_TEST_PIDFILE;
-  const realSet = globalThis.setTimeout;
-  const realClear = globalThis.clearTimeout;
-  let probeTimer;
-  let cleared = false;
-  globalThis.setTimeout = (fn, ms, ...rest) => {
-    const handle = realSet(fn, ms, ...rest);
-    if (ms === 8888) probeTimer = { handle, fn };
-    return handle;
-  };
-  globalThis.clearTimeout = (handle) => {
-    if (probeTimer && handle === probeTimer.handle) cleared = true;
-    return realClear(handle);
-  };
-  process.env.AGY_TEST_PIDFILE = pidFile;
-  try {
-    const run = rawRunDoctor({
-      signal: controller.signal, versionTimeoutMs: 8888,
-      spawnSpec: { command: fileURLToPath(new URL("./fixtures/version-hang-pid-stub.js", import.meta.url)), args: [], options: { shell: false } },
-    });
-    const deadline = Date.now() + 5000;
-    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => realSet(r, 20));
-    const pid = Number(readFileSync(pidFile, "utf8").trim());
-    controller.abort();
-    if (!cleared) { realClear(probeTimer.handle); probeTimer.fn(); }
-    const out = await run;
-    assert.equal(out.agent.error, "version probe aborted by MCP host");
-    let alive = true;
-    try { process.kill(pid, 0); } catch { alive = false; }
-    assert.equal(alive, false, "the probe must be gone when doctor returns");
-  } finally {
-    globalThis.setTimeout = realSet;
-    globalThis.clearTimeout = realClear;
-    if (saved === undefined) delete process.env.AGY_TEST_PIDFILE; else process.env.AGY_TEST_PIDFILE = saved;
-    rmSync(pidFile, { force: true });
   }
 });

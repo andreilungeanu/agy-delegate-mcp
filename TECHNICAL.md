@@ -133,6 +133,7 @@ diagnostic, not fail the call.
 | `src/turn-state.js` | Per-turn accumulation, artifacts, and the `reset()` declaration. |
 | `src/model-options.js` | Thinking-level option resolution (`effort`). |
 | `src/proc.js` | Liveness check and process kill. |
+| `src/shutdown.js` | Stops every agent, then exits, when the host goes away. |
 | `src/errors.js` | Reason-tagged errors. |
 | `src/version.js` | Version read from `package.json`. |
 | `.claude-plugin/hooks.json`, `.claude-plugin/ensure-deps.mjs` | Claude/VS Code SessionStart dependency bootstrap. |

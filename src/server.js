@@ -8,7 +8,8 @@ import { z } from "zod";
 import { runDelegate as runDelegateDefault } from "./delegate.js";
 import { runDoctor as runDoctorDefault } from "./doctor.js";
 import { VERSION, readPackageVersion } from "./version.js";
-import { DETACHED, children } from "./proc.js";
+import { children } from "./proc.js";
+import { installSignalCleanup } from "./shutdown.js";
 import { TASKS_EXTENSION, createTaskStore, listsTasks, registerTaskHandlers, runAsTask } from "./tasks.js";
 
 const ICON_BASE = `https://raw.githubusercontent.com/andreilungeanu/agy-delegate-mcp/v${VERSION}/assets`;
@@ -347,44 +348,27 @@ export function buildServer({
         const known = seenSessions.has(sessionId);
         return statusResult(known ? "not-running" : "not-found", sessionId);
       }
-      // A handle whose turn ended stays registered while agy closes. A cancel leaves its result
-      // alone; force only cuts the close short.
-      const ending = [...handles].filter((handle) => handle.ended);
-      const live = [...handles].filter((handle) => !handle.ended);
-      const stopQuietly = (handle) => Promise.resolve(handle.client.stop()).catch(() => false);
-      if (live.length === 0) {
-        if (force) await Promise.all(ending.map(stopQuietly));
-        return statusResult("not-running", sessionId);
-      }
-      for (const handle of live) handle.cancelRequested = true;
-      await Promise.all(live.map((handle) => handle.client.cancel(sessionId).catch(() => {})));
+      // An ended turn stays registered while agy closes; its result is decided, so a cancel leaves
+      // it alone. Taken now, so a resume that registers during the grace is not swept in.
+      const targeted = [...handles].filter((handle) => !handle.ended);
+      if (targeted.length === 0) return statusResult("not-running", sessionId);
+      for (const handle of targeted) handle.cancelRequested = true;
+      await Promise.all(targeted.map((handle) => handle.client.cancel(sessionId).catch(() => {})));
       if (!force) {
         // The handles stay registered: session/cancel is best-effort, and a follow-up force must
         // still find a turn that kept running.
         return statusResult("cancelled", sessionId);
       }
-      // Each turn's close is cut as soon as it settles (agy stops a cancelled turn in milliseconds);
-      // what still runs when the grace ends is killed.
-      const closing = ending.map(stopQuietly);
-      const cut = new Set();
+      // Polled, not slept through: agy stops a cancelled turn in milliseconds.
+      const running = () => targeted.filter((handle) => !handle.ended && flights.get(sessionId)?.has(handle));
       const graceEnds = Date.now() + forceGraceMs;
-      for (;;) {
-        for (const handle of live) {
-          if (!cut.has(handle) && (handle.ended || !flights.get(sessionId)?.has(handle))) {
-            cut.add(handle);
-            closing.push(stopQuietly(handle));
-          }
-        }
-        if (cut.size === live.length || Date.now() >= graceEnds) break;
+      while (Date.now() < graceEnds && running().length) {
         await new Promise((r) => setTimeout(r, Math.min(50, Math.max(1, graceEnds - Date.now()))));
       }
-      // Classified the moment the grace ends and killed alongside the closes, not after them: a slow
-      // close would delay the kill, and a turn ending meanwhile would be reported killed. A snapshot,
-      // so a resume registering during teardown is not swept from the map.
-      const toKill = live.filter((handle) => !cut.has(handle));
-      const [observed] = await Promise.all([Promise.all(toKill.map(stopQuietly)), Promise.all(closing)]);
+      const toKill = running();
       if (toKill.length === 0) return statusResult("cancelled", sessionId);
-      // "killed" needs an observed exit; without one the handles stay and force can be retried.
+      const observed = await Promise.all(toKill.map((handle) => Promise.resolve(handle.client.stop()).catch(() => false)));
+      // "killed" needs an observed exit.
       if (!observed.every(Boolean)) return statusResult("cancelled", sessionId);
       for (const handle of toKill) unregisterInFlight(flights, sessionId, handle);
       return statusResult("killed", sessionId);
@@ -463,52 +447,6 @@ if (process.argv[1]) {
   }
 }
 
-// Kill what is still running, then exit, on any way the host has of going away. Returns the
-// shutdown stdin EOF triggers, for a host that goes some other way.
-/** @param {import("./proc.js").ChildRegistry} [registry] @returns {() => void} */
-export function installSignalCleanup(registry = children, {
-  exit = (code) => process.exit(code),
-  setExitCode = (code) => { process.exitCode = code; },
-  schedule = (fn) => setImmediate(fn),
-  stdin = process.stdin,
-} = {}) {
-  let shuttingDown = false;
-  let signalsSeen = 0;
-  // The code shutdown exits with: a signal's, even when it follows the stdin EOF.
-  let exitCode = 0;
-  const shutdown = (code, fromSignal = false) => {
-    // Only a second signal skips the wait for the kills: a hangup closes stdin and sends SIGHUP,
-    // in either order. The first stops may still be in their ps walk, so the groups are killed
-    // synchronously before leaving.
-    if (fromSignal) signalsSeen++;
-    if (shuttingDown) {
-      if (fromSignal && signalsSeen === 1) { exitCode = code; setExitCode(code); }
-      if (signalsSeen < 2) return undefined;
-      registry.killAllNow();
-      return exit(code);
-    }
-    shuttingDown = true;
-    exitCode = code;
-    // Set now: if the loop runs dry before the scheduled exit, the process still exits with it.
-    setExitCode(code);
-    // Exit waits for the kills: on Windows taskkill is a separate process, and exiting first leaves
-    // the launcher and agent running (measured). Each stop bounds itself. The exit is scheduled onto
-    // a clean loop turn, off the settlement stack.
-    const leave = () => schedule(() => exit(exitCode));
-    registry.stopAll().then(leave, leave);
-  };
-  // On POSIX each agent has its own process group, so a signal to this process does not reach it.
-  // The handler replaces Node's default and must exit, not swallow the signal.
-  if (DETACHED) {
-    // SIGHUP is a closed terminal; its default would end the server without stopping the agents.
-    const signals = /** @type {[NodeJS.Signals, number][]} */ ([["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]);
-    for (const [signal, code] of signals) process.on(signal, () => shutdown(code, true));
-  }
-  // A stdio host shuts down by closing stdin; the SDK closes its transport but does not stop agy.
-  stdin.on("end", () => shutdown(0));
-  return () => shutdown(0);
-}
-
 if (isMain) {
   // Confirms an install without a host. Reads the package.json beside this file, so it reports the
   // code that runs, not a manifest pin.
@@ -516,7 +454,7 @@ if (isMain) {
   if (argv.includes("--version") || argv.includes("-v")) {
     console.log(readPackageVersion());
   } else {
-    const hostGone = installSignalCleanup();
+    const hostGone = installSignalCleanup(() => children.stopAll());
     const transport = new StdioServerTransport();
     // One factory serves both protocol eras: a 2025-era initialize pins a legacy instance, and only
     // a modern one answers with tasks.
