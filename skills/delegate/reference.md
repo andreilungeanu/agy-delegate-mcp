@@ -87,7 +87,7 @@ Errors come back as `delegate failed [<reason>]: …`.
 | `invalid-effort` | `effort` is not a level the selected model advertises (`Accepted: [...]`), or no option the model advertises was recognized as effort (`Advertised: [...]`). No prompt was sent. | With `Accepted`, retry the named session with the complete original `spec` and one of those values. With `Advertised`, report that the bridge failed to recognize the option rather than retrying. |
 | `effort-options-unavailable` | The selected model did not report a usable thinking-level list. No prompt was sent. | Retry the named session once with the complete original `spec`; if it repeats, run `doctor` and report the capability failure rather than guessing. |
 | `resume-failed` | `resumeSessionId` could not be resumed, and agy still lists that session (or its session list could not be read) — no fresh session was started. | Retry; omit `resumeSessionId` to start fresh deliberately. A session agy does not have is not this: it starts fresh and reports a `protocolWarnings` entry. |
-| `agent-error` | agy rejected a request (JSON-RPC error). | Read the message; fix the argument if it names one. |
+| `agent-error` | agy answered a request with a JSON-RPC error, named with its code. | Read the message; fix the argument if it names one. |
 | `hard-cap` | The 6h absolute cap elapsed. | Resume the id in the message. |
 | `idle-timeout` | Opt-in mid-turn idle guard tripped (off by default). | Resume the id in the message. |
 | `spawn-failed` | The agent process could not be started at all (launcher missing or not executable). | Install the Antigravity CLI and sign in by running `agy` once; `doctor` shows the launcher resolution. |
