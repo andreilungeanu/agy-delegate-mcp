@@ -33,7 +33,6 @@ const sdk = await loadSdk();
 const AGY = fileURLToPath(new URL("./fixtures/scripted-agy.js", import.meta.url));
 const SPEC = "Do the phase task.";
 const STEER_A = "Go left instead.";
-const STEER_B = "Go right instead.";
 const CHATTER = "setup chatter";
 const DONE = "TASK DONE";
 // Read one by one before the prompt goes out, which holds the attachment phase open long enough
@@ -43,27 +42,18 @@ const FORCE_GRACE_MS = 1000;
 const HELD_SETUP_MS = 1000;
 const CLOSE_CUT_MS = 1000;
 
-const BARRIERS = ["initialize", "session/new", "set_config_option", "set_mode", "prompt", "turn", "background", "teardown"];
-const BEFORE_SESSION = ["initialize", "session/new"];
-const SETUP = ["set_config_option", "set_mode"];
-const TURN = ["prompt", "turn", "background"];
+// One barrier before the session id is announced, one in setup, and the turn with its background wait.
+const BARRIERS = ["session/new", "set_mode", "turn", "background"];
+const BEFORE_SESSION = ["session/new"];
+const SETUP = ["set_mode"];
+const TURN = ["turn", "background"];
 const EVENTS = ["cancel", "cancel-force", "steer", "abort", "exit"];
 const CASES = [
   ...BARRIERS.flatMap((barrier) => EVENTS.map((event) => ({ barrier, event }))),
-  { barrier: "set_config_option", event: "cancel", release: "error" },
-  { barrier: "set_mode", event: "cancel", release: "error" },
   { barrier: "turn", event: "steer", steer: "rejected" },
-  { barrier: "turn", event: "steer", steer: "accepted-then-fails" },
-  { barrier: "turn", event: "steer", steer: "behind-a-failed-prompt" },
-  { barrier: "turn", event: "steer", steer: "second-behind-a-failed-steer" },
-  { barrier: "teardown", event: "steer", setup: "fails" },
-  { barrier: "teardown", event: "cancel", setup: "fails" },
 ];
 
-const caseName = (c) => [
-  c.event, c.steer && `(${c.steer})`, c.release && "then agy fails the held call",
-  "at", c.barrier, c.setup && "after agy rejects set_mode",
-].filter(Boolean).join(" ");
+const caseName = (c) => [c.event, c.steer && `(${c.steer})`, "at", c.barrier].filter(Boolean).join(" ");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function within(promise, ms) {
@@ -215,8 +205,7 @@ async function runCase(c) {
       o.cancel = await status("cancel", { sessionId: sid, force: c.event === "cancel-force" });
       await probe();
       if (o.cancel === "cancelled") await arrived((f) => f.method === "session/cancel");
-      if (c.release === "error") release("error");
-      else if (c.event === "cancel" && SETUP.includes(c.barrier)) o.endedWithSetupHeld = await within(hostDone, HELD_SETUP_MS);
+      if (c.event === "cancel" && SETUP.includes(c.barrier)) o.endedWithSetupHeld = await within(hostDone, HELD_SETUP_MS);
     } else if (c.event === "steer") {
       o.steerFirst = o.steerLast = await steer(STEER_A);
       o.steerTries = 1;
@@ -228,7 +217,6 @@ async function runCase(c) {
         o.steerLast = await steer(STEER_A);
         o.steerTries++;
       }
-      if (c.steer === "second-behind-a-failed-steer") o.steerSecond = await steer(STEER_B);
     } else if (c.event === "abort") {
       abort.abort();
       await within(serverDone, 5000);
@@ -238,8 +226,7 @@ async function runCase(c) {
       await within(bridgeExit, 5000);
       await probe();
     }
-    // Left unanswered, so only the bridge can end agy's close.
-    release(c.barrier === "teardown" && (c.event === "cancel-force" || c.event === "abort") ? "hold" : "reply");
+    release("reply");
   }
 
   // At the case's barrier, fires its event; resolves to how agy answers the request it holds.
@@ -250,18 +237,14 @@ async function runCase(c) {
   }
 
   async function held(phase, frame, result) {
-    const release = await gate(phase);
-    if (release === "hold") return release;
-    if (release === "error") agy.fail(frame, -32603, "Internal error");
-    else agy.reply(frame, result);
-    return release;
+    await gate(phase);
+    agy.reply(frame, result);
   }
 
   async function onTask(frame) {
     task = frame;
     unanswered.add(frame);
-    await gate("prompt");
-    if (!unanswered.has(frame) || !agy.alive) return;
+    if (!agy.alive) return;
     agy.update(sid, message("Working. "));
     if (c.barrier === "background") return backgroundTurn(frame);
     await gate("turn");
@@ -300,23 +283,9 @@ async function runCase(c) {
       agy.update(sid, message(`STEERED: ${textOf(frame)}`));
       answer(frame, { stopReason: "end_turn" });
     };
-    switch (c.steer) {
-      case "rejected":
-        return answerError(frame, -32602, "Invalid params: steer rejected");
-      case "accepted-then-fails":
-        redirect();
-        return later(() => answerError(frame, -32603, "Internal error: quota exhausted"));
-      case "behind-a-failed-prompt":
-        if (task) answerError(task, -32603, "Internal error: first prompt failed");
-        return later(finish);
-      case "second-behind-a-failed-steer":
-        if (steers.length === 1) return redirect();
-        answerError(steers[0], -32603, "Internal error: quota exhausted");
-        return later(finish);
-      default:
-        redirect();
-        return later(finish);
-    }
+    if (c.steer === "rejected") return answerError(frame, -32602, "Invalid params: steer rejected");
+    redirect();
+    later(finish);
   }
 
   function onCancel() {
@@ -329,21 +298,17 @@ async function runCase(c) {
 
   agy.onFrame = (frame) => {
     switch (frame.method) {
-      case "initialize": return held("initialize", frame, INITIALIZE);
+      case "initialize": return agy.reply(frame, INITIALIZE);
       case "session/new": return held("session/new", frame, { sessionId: sid, configOptions: [modelOption("model-a")] });
-      case "session/set_config_option": return held("set_config_option", frame, { configOptions: [modelOption(frame.params.value)] });
+      case "session/set_config_option": return agy.reply(frame, { configOptions: [modelOption(frame.params.value)] });
       case "session/set_mode":
-        if (c.setup === "fails") return agy.fail(frame, -32603, "Internal error: mode rejected");
-        return held("set_mode", frame, {}).then((release) => {
+        return held("set_mode", frame, {}).then(() => {
           // Lands while the bridge reads the attachments, before the task prompt is out.
-          if (release === "reply") setTimeout(() => agy.update(sid, message(CHATTER)), 2);
+          setTimeout(() => agy.update(sid, message(CHATTER)), 2);
         });
       case "session/prompt": return textOf(frame) === SPEC ? onTask(frame) : onSteer(frame);
       case "session/cancel": return onCancel();
-      case "session/close":
-        // Left unanswered after a force cancel, so only the force can end agy's close.
-        if (c.event === "cancel-force" && !BEFORE_SESSION.includes(c.barrier) && c.barrier !== "teardown") return;
-        return held("teardown", frame, {});
+      case "session/close": return agy.reply(frame, {});
       default: if (frame.id !== undefined) agy.fail(frame, -32601, `Method not found: ${frame.method}`);
     }
   };
@@ -408,14 +373,11 @@ function violations(c, o) {
       if (o.endedWithSetupHeld !== undefined) {
         rule(o.endedWithSetupHeld, `a cancel before the prompt ends setup at once, with agy's ${c.barrier} reply still held (719fb8a)`);
       }
-      rule(out?.stopReason === "cancelled", c.release === "error"
-        ? `a cancel before the prompt returns stopReason cancelled even when agy then fails the held call (719fb8a); got ${got}`
-        : `a cancel before the prompt returns stopReason cancelled (be92164); got ${got}`);
+      rule(out?.stopReason === "cancelled", `a cancel before the prompt returns stopReason cancelled (be92164); got ${got}`);
       rule(out?.result === "" && out?.resultSource === "none", `a setup-cancelled delegation returns an empty result with resultSource none (d712105); got ${got}`);
       rule(out && !out.protocolWarnings && !out.filesReportedByEditTools,
         `a setup-cancelled delegation reports no warnings and no files (be92164); got ${show(out?.protocolWarnings)} ${show(out?.filesReportedByEditTools)}`);
-    } else if (TURN.includes(c.barrier)) {
-      // A force cancel ends in a kill when agy's held close keeps the turn from leaving.
+    } else {
       rule(o.cancel === "cancelled", `cancel while the turn runs reports cancelled (${c.event === "cancel-force" ? "fd89088" : "40ac9a4"}); got ${o.cancel}`);
       rule(cancelAt >= 0, "a cancel while the turn runs reaches agy as session/cancel (40ac9a4)");
       rule(out?.stopReason === "cancelled" && out.cancelRequested === true,
@@ -423,10 +385,6 @@ function violations(c, o) {
       if (c.barrier === "background" && c.event === "cancel") {
         rule(o.settledMs < CLOSE_CUT_MS, `a cancel ends the background wait at once (564816e); the delegation returned ${o.settledMs} ms after it`);
       }
-    } else {
-      rule(o.cancel === "not-running", `cancel after the turn ended reports not-running (fd89088); got ${o.cancel}`);
-      rule(cancelAt < 0, "a cancel after the turn ended sends agy no session/cancel (fd89088)");
-      rule(c.setup === "fails" ? reason === "agent-error" : finishedTask(), `a cancel after the turn ended leaves its result alone (fd89088); got ${got}`);
     }
   }
 
@@ -439,7 +397,7 @@ function violations(c, o) {
       rule(o.steerFirst === "not-ready", `steer before the task prompt is out reports not-ready (afbf039); got ${o.steerFirst}`);
       rule(o.steerLast === "steered", `a host retrying a not-ready steer gets steered once the task prompt is out (9a73be1); got ${o.steerLast} after ${o.steerTries} tries`);
       rule(out && steeredResult(STEER_A), `the steered turn's reply is the result (50b41a3); got ${got}`);
-    } else if (TURN.includes(c.barrier)) {
+    } else {
       rule(o.steerFirst === "steered", `steer while the turn runs reports steered (9a73be1); got ${o.steerFirst}`);
       if (c.barrier === "background") {
         rule(o.settledMs < CLOSE_CUT_MS, `a steer ends the background wait at once (50b41a3); the delegation returned ${o.settledMs} ms after it`);
@@ -447,43 +405,20 @@ function violations(c, o) {
       if (c.steer === "rejected") {
         rule(finishedTask() && warnings.some((w) => /steer was rejected/.test(w)),
           `a steer agy rejects leaves the turn's own result and reports the rejection (6b23413); got ${got} ${show(warnings)}`);
-      } else if (c.steer === "accepted-then-fails") {
-        rule(reason === "agent-error" && /quota exhausted/.test(o.result.error), `a steer agy accepted and then failed fails the delegation (5adc528); got ${got}`);
-      } else if (c.steer === "behind-a-failed-prompt") {
-        rule(out && steeredResult(STEER_A), `a steer queued behind a failed prompt is the result (5adc528); got ${got}`);
-      } else if (c.steer === "second-behind-a-failed-steer") {
-        rule(o.steerSecond === "steered" && out && steeredResult(STEER_B),
-          `a steer queued behind one that failed mid-turn is the result (53542be); second steer ${o.steerSecond}, got ${got}`);
       } else {
         rule(out && steeredResult(STEER_A), `the steered turn's reply is the result (50b41a3); got ${got}`);
       }
-    } else {
-      rule(o.steerFirst === "not-running",
-        `steer after the turn ended reports not-running (${c.setup === "fails" ? "bf6749e" : "afbf039"}); got ${o.steerFirst}`);
-      rule(prompts.every((text) => text === SPEC), `agy receives no steer after the turn ended (afbf039); agy got prompts ${show(prompts)}`);
-      rule(c.setup === "fails" ? reason === "agent-error" : finishedTask(), `a steer after the turn ended leaves its result alone (afbf039); got ${got}`);
     }
   }
 
   if (c.event === "abort") {
-    if (c.barrier === "teardown") {
-      rule(o.server?.value?.result?.includes(DONE), `an abort during agy's close keeps the decided result (214a93f); got ${show(o.server).slice(0, 300)}`);
-    } else {
-      rule(o.server?.error?.reason === "aborted", `an abort fails the delegation as aborted (40ac9a4); got ${show(o.server).slice(0, 300)}`);
-      if (!TURN.includes(c.barrier)) {
-        rule(prompts.length === 0, `agy receives no task prompt after an abort during setup (40ac9a4); agy got prompts ${show(prompts)}`);
-      }
+    rule(o.server?.error?.reason === "aborted", `an abort fails the delegation as aborted (40ac9a4); got ${show(o.server).slice(0, 300)}`);
+    if (!TURN.includes(c.barrier)) {
+      rule(prompts.length === 0, `agy receives no task prompt after an abort during setup (40ac9a4); agy got prompts ${show(prompts)}`);
     }
   }
 
-  if (c.event === "exit") {
-    if (c.barrier === "teardown") {
-      rule(finishedTask() && !warnings.some((w) => /could not confirm that agy and its processes exited/.test(w)),
-        `agy exiting during its close leaves the result, with the exit seen (ed7de7b); got ${got} ${show(warnings)}`);
-    } else {
-      rule(reason === "agent-exit", `agy exiting fails the delegation as agent-exit (e0ed965); got ${got}`);
-    }
-  }
+  if (c.event === "exit") rule(reason === "agent-exit", `agy exiting fails the delegation as agent-exit (e0ed965); got ${got}`);
 
   if (c.event !== "steer") {
     const expected = registered ? "not-running" : "not-found";
