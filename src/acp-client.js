@@ -51,8 +51,8 @@ export class AcpClient extends EventEmitter {
     // agy treats its process directory as part of the workspace: started elsewhere, it ran git
     // status there (measured, agy 1.5.14).
     this.cwd = cwd;
-    this._stderrChunks = [];
-    this._stderrLength = 0;
+    // The stderr tail an exit error quotes; not counted as activity.
+    this.stderrBuffer = "";
     /** @type {Promise<boolean> | null} */
     this._stopping = null;
     // Sessions opened on this process, which a graceful stop closes.
@@ -66,13 +66,6 @@ export class AcpClient extends EventEmitter {
 
   get child() { return this._child; }
 
-  // The stderr tail an exit error quotes; not counted as activity. Kept as chunks and joined on
-  // read, which is cheap for a noisy agent; the StringDecoder keeps split UTF-8 characters whole.
-  get stderrBuffer() {
-    const joined = this._stderrChunks.join("");
-    return joined.length > STDERR_CAP ? joined.slice(-STDERR_CAP) : joined;
-  }
-
   async start() {
     const { command, args, options } = this.spawnSpec;
     const child = spawnChild(command, args, options, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"] }, this.registry);
@@ -80,25 +73,11 @@ export class AcpClient extends EventEmitter {
       throw makeError("spawn-failed", `Failed to spawn agent (${command}): not found on PATH. Install the Antigravity CLI (agy) and sign in by running agy once.`);
     }
     this._child = child;
-    this._stderrChunks = [];
-    this._stderrLength = 0;
+    this.stderrBuffer = "";
+    // Keeps a UTF-8 character split across reads whole.
     const stderrDecoder = new StringDecoder("utf8");
     this.child.stderr.on("data", (chunk) => {
-      const text = stderrDecoder.write(chunk);
-      if (text) {
-        this._stderrChunks.push(text);
-        this._stderrLength += text.length;
-        // Whole chunks are dropped once past the cap; the tail is trimmed exactly on read.
-        while (this._stderrChunks.length > 1 && this._stderrLength - this._stderrChunks[0].length >= STDERR_CAP) {
-          this._stderrLength -= this._stderrChunks.shift().length;
-        }
-        // A single read larger than the cap (seen on GitHub Windows runners) is sliced.
-        const overflow = this._stderrLength - STDERR_CAP;
-        if (overflow > 0) {
-          this._stderrChunks[0] = this._stderrChunks[0].slice(overflow);
-          this._stderrLength -= overflow;
-        }
-      }
+      this.stderrBuffer = (this.stderrBuffer + stderrDecoder.write(chunk)).slice(-STDERR_CAP);
     });
     this.child.stderr.on("error", () => {});
     // A write after the agent is gone raises 'error' on stdin. readline forwards stdout's errors only
