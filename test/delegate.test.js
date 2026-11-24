@@ -12,7 +12,7 @@ import { z } from "zod";
 import { AcpClient, stampSettlement } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 import { runDelegate as rawRunDelegate, readUsage, executionSummary, RECENT_COMMANDS, OLDER_FAILED_COMMANDS } from "../src/delegate.js";
-import { delegateOutputShape } from "../src/server.js";
+import { delegateOutputShape } from "./output-shapes.js";
 import { askingClientFactory } from "./fixtures/asking-client.js";
 
 const require = createRequire(import.meta.url);
