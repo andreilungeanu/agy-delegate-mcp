@@ -45,7 +45,7 @@ export async function treeKill(pid, { childAlive = true } = {}) {
     // An exited leader has no tree left for taskkill to walk, and its pid may be reused.
     if (!childAlive) return;
     await /** @type {Promise<void>} */ (new Promise((resolve) => {
-      execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
+      execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: TASKKILL_MS, killSignal: "SIGKILL" }, () => resolve());
     }));
     return;
   }
@@ -65,6 +65,8 @@ export async function treeKill(pid, { childAlive = true } = {}) {
 // How long one kill attempt waits for the exit and the tree kill; it elapses when the kill failed or
 // the tree walk is slow.
 export const KILL_WAIT_MS = 2000;
+// A taskkill still running by then is stopped, and the launcher killed by its handle instead.
+const TASKKILL_MS = KILL_WAIT_MS;
 
 async function killAndSeeExit(child, timeoutMs) {
   if (!child.pid) return true;
@@ -78,7 +80,10 @@ async function killAndSeeExit(child, timeoutMs) {
   // would end past this attempt's deadline after the first had killed the child.
   let killed = treeKills.get(child);
   if (!killed) {
-    killed = treeKill(child.pid, { childAlive: alive }).catch(() => {}).finally(() => treeKills.delete(child));
+    killed = treeKill(child.pid, { childAlive: alive }).catch(() => {})
+      // taskkill can fail or stall; the launcher's own handle still kills it, and no reused pid.
+      .then(() => { if (process.platform === "win32" && isChildAlive(child)) { try { child.kill("SIGKILL"); } catch {} } })
+      .finally(() => treeKills.delete(child));
     treeKills.set(child, killed);
   }
   /** @type {NodeJS.Timeout | undefined} */
