@@ -80,7 +80,11 @@ async function killAndSeeExit(child, timeoutMs) {
   // a time: a walk still running from an earlier attempt has sent no kill yet, and a second one
   // would end past this attempt's deadline after the first had killed the child.
   let killed = treeKills.get(child);
-  if (!killed) {
+  if (!killed && unconfirmed.has(child)) {
+    // taskkill already failed on this tree: the launcher's handle is all a retry has left.
+    if (alive) { try { child.kill("SIGKILL"); } catch {} }
+    killed = Promise.resolve();
+  } else if (!killed) {
     killed = treeKill(child.pid, { childAlive: alive }).catch(() => false).then((tidy) => {
       if (tidy) return;
       // The launcher's own handle still kills it, and no reused pid, but what it started may run on:
