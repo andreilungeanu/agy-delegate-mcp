@@ -1920,7 +1920,7 @@ for (const [label, listSessions] of [
     const factory = () => {
       const client = stubClient("sess-fresh");
       client.newSession = async () => { newSessions++; return { sessionId: "sess-fresh" }; };
-      client.resumeSession = async () => { throw rpcError(-32603, "Failed to read session old-id; retry, or load it with session/load"); };
+      client.resumeSession = async () => { throw Object.assign(rpcError(-32603, "Failed to read session old-id; retry, or load it with session/load"), { method: "session/resume" }); };
       client.listSessions = listSessions;
       return client;
     };
@@ -1928,7 +1928,7 @@ for (const [label, listSessions] of [
       () => runDelegate({ spec: "task", resumeSessionId: "old-id", workspace: process.cwd(), clientFactory: factory }),
       (err) => {
         assert.equal(err.reason, "resume-failed");
-        assert.match(err.message, /Failed to read session old-id/);
+        assert.ok(err.message.includes("Failed to read session old-id; retry, or load it with session/load (session/resume JSON-RPC -32603)."), err.message);
         return true;
       }
     );

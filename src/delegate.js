@@ -170,6 +170,12 @@ async function newSession(client, workspace, retryMs) {
   }
 }
 
+// The request and code of an error agy answered with, as " (session/new JSON-RPC -32603)"; else "".
+function rpcNote(err) {
+  if (err?.reason || typeof err?.code !== "number") return "";
+  return ` (${err.method ? `${err.method} ` : ""}JSON-RPC ${err.code})`;
+}
+
 async function openSession(client, resumeSessionId, workspace, retryMs) {
   if (!resumeSessionId) return newSession(client, workspace, retryMs);
   try {
@@ -179,7 +185,7 @@ async function openSession(client, resumeSessionId, workspace, retryMs) {
     if ((await sessionExists(client, resumeSessionId)) !== false) {
       throw makeError(
         "resume-failed",
-        `session ${resumeSessionId} could not be resumed: ${err?.message || String(err)}.`
+        `session ${resumeSessionId} could not be resumed: ${err?.message || String(err)}${rpcNote(err)}.`
         + ` The session was not resumed and no fresh session was started — retry, or omit`
         + ` resumeSessionId to start fresh deliberately.`
       );
@@ -713,7 +719,7 @@ export async function runDelegate({
     const reason = err?.reason || (err?.code === -32000 ? "not-signed-in" : fromAgy ? "agent-error" : undefined);
     failure = { cause: err, reason, notes: [] };
     const { notes } = failure;
-    if (fromAgy) notes.push(` (${err.method ? `${err.method} ` : ""}JSON-RPC ${err.code})`);
+    if (fromAgy) notes.push(rpcNote(err));
     if (!err?.reason && err?.code === -32000) notes.push(". agy is not signed in: run agy once in a terminal and sign in, then retry.");
     // A bare duration cannot tell a wedged agent from a slow command, so name what was outstanding.
     const isTimeout = reason === "hard-cap" || reason === "idle-timeout";
