@@ -2234,9 +2234,7 @@ test("context ignores a usage_update addressed to another session", async () => 
   assert.deepEqual(out.context, { used: 10, size: 100 });
 });
 
-// stop() reports whether it saw the agent exit. Ignored, a surviving agent went unmentioned and,
-// with the handle dropped, unreachable through cancel.
-test("an agent that does not exit after the stop is reported", async () => {
+test("an agent the stop could not confirm exited is reported", async () => {
   let stops = 0;
   const out = await runDelegate({
     spec: "task", workspace: process.cwd(),
@@ -2250,25 +2248,7 @@ test("an agent that does not exit after the stop is reported", async () => {
       return client;
     },
   });
-  assert.equal(stops, 1, "the stop retries its own kill");
-  assert.ok(out.protocolWarnings?.some((w) => /could not confirm that agy and its processes exited/.test(w)), JSON.stringify(out.protocolWarnings));
-});
-
-test("a stop that rejects is reported like one that could not confirm the exit", async () => {
-  let stops = 0;
-  const out = await runDelegate({
-    spec: "task", workspace: process.cwd(),
-    clientFactory: () => {
-      const client = stubClient("sess-reject");
-      client.prompt = async () => {
-        client.emit("update", { update: msgChunk("ok") });
-        return { stopReason: "end_turn" };
-      };
-      client.stop = async () => { stops++; throw new Error("taskkill failed"); };
-      return client;
-    },
-  });
-  assert.equal(stops, 1);
+  assert.equal(stops, 1, "the agent is stopped once");
   assert.ok(out.protocolWarnings?.some((w) => /could not confirm that agy and its processes exited/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
