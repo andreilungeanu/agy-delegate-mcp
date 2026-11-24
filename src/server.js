@@ -18,6 +18,14 @@ const SERVER_ICONS = [
   { src: `${ICON_BASE}/logo-light.png`, mimeType: "image/png", sizes: ["1024x1024"], theme: "light" },
   { src: `${ICON_BASE}/logo-dark.png`, mimeType: "image/png", sizes: ["1024x1024"], theme: "dark" },
 ];
+const SERVER_INFO = {
+  name: "agy-delegate-mcp",
+  title: "Antigravity Delegate",
+  description: "Bridge AI coding hosts to Google Antigravity's agy over the Agent Client Protocol.",
+  version: VERSION,
+  websiteUrl: "https://github.com/andreilungeanu/agy-delegate-mcp",
+  icons: SERVER_ICONS,
+};
 
 const nodeMajor = Number(process.versions.node.split(".")[0]);
 if (nodeMajor < 20) {
@@ -179,17 +187,14 @@ export function buildServer({
   const runDoctor = runDoctorInjected || runDoctorDefault;
   // Tasks only on a 2026-07-28 instance: the SDK also lifts envelope keys off 2025-era requests.
   const servesTasks = era === "modern";
-  const server = new McpServer(
-    { name: "agy-delegate-mcp", version: VERSION, icons: SERVER_ICONS },
-    {
-      instructions: SERVER_INSTRUCTIONS,
-      capabilities: {
-        // The tool list never changes, and the SDK advertises listChanged unless told otherwise.
-        tools: { listChanged: false },
-        ...(servesTasks ? { extensions: { [TASKS_EXTENSION]: {} } } : {}),
-      },
-    }
-  );
+  const server = new McpServer(SERVER_INFO, {
+    instructions: SERVER_INSTRUCTIONS,
+    capabilities: {
+      // The tool list never changes, and the SDK advertises listChanged unless told otherwise.
+      tools: { listChanged: false },
+      ...(servesTasks ? { extensions: { [TASKS_EXTENSION]: {} } } : {}),
+    },
+  });
   if (servesTasks) registerTaskHandlers(server, tasks);
   // A task id names its own run, which a later turn on the same session is not; a session id names
   // every turn running on it.
@@ -207,6 +212,7 @@ export function buildServer({
       description:
         "Delegate a coding task to Antigravity's agy over ACP. Never shell out to agy — use this tool only. Auto-approves every permission the agent requests, in any mode and anywhere on disk. agy's clarifying questions arrive in questions — resume with resumeSessionId and the answers in spec. Leave model and effort unset unless the user explicitly asks. See the delegate skill.",
       inputSchema: delegateInputSchema,
+      title: "Delegate coding task to Antigravity",
       annotations: {
         title: "Delegate coding task to Antigravity",
         readOnlyHint: false,
@@ -234,6 +240,7 @@ export function buildServer({
         sessionId: sessionIdInput,
         force: z.boolean().default(false).describe("Kill the agent process if the turn is still running after a short grace period."),
       }),
+      title: "Cancel Antigravity delegation",
       annotations: {
         title: "Cancel Antigravity delegation",
         readOnlyHint: false,
@@ -285,6 +292,7 @@ export function buildServer({
         sessionId: sessionIdInput,
         message: z.string().trim().min(1, "message must not be blank").describe("The new instruction for agy."),
       }),
+      title: "Steer Antigravity delegation",
       annotations: {
         title: "Steer Antigravity delegation",
         readOnlyHint: false,
@@ -310,6 +318,7 @@ export function buildServer({
           .default(false)
           .describe("Run an ACP handshake (start → initialize → newSession) to verify the agent is usable and signed in; adds models, modes, the current model's options and the account tier."),
       }),
+      title: "Diagnose Antigravity delegation setup",
       annotations: {
         title: "Diagnose Antigravity delegation setup",
         readOnlyHint: true,
