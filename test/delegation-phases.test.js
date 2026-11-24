@@ -7,28 +7,14 @@ import readline from "node:readline";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { Client } from "@modelcontextprotocol/client";
 import { AcpClient } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
 import { runDelegate } from "../src/delegate.js";
 import { buildServer } from "../src/server.js";
 import { mkdtemp } from "./fixtures/temp-dir.mjs";
 
-// The same file runs on trees built on MCP SDK v1 (@modelcontextprotocol/sdk) and v2.
-async function loadSdk() {
-  try {
-    const [{ Client }, { InMemoryTransport }] = await Promise.all([
-      import("@modelcontextprotocol/client"), import("@modelcontextprotocol/server"),
-    ]);
-    return { Client, InMemoryTransport, callTool: (client, params, options) => client.callTool(params, options) };
-  } catch (err) {
-    if (err?.code !== "ERR_MODULE_NOT_FOUND") throw err;
-    const [{ Client }, { InMemoryTransport }] = await Promise.all([
-      import("@modelcontextprotocol/sdk/client/index.js"), import("@modelcontextprotocol/sdk/inMemory.js"),
-    ]);
-    return { Client, InMemoryTransport, callTool: (client, params, options) => client.callTool(params, undefined, options) };
-  }
-}
-const sdk = await loadSdk();
 
 const AGY = fileURLToPath(new URL("./fixtures/scripted-agy.js", import.meta.url));
 const SPEC = "Do the phase task.";
@@ -165,15 +151,14 @@ async function runCase(c) {
   };
 
   const mcp = buildServer({ runDelegate: runInCase, forceGraceMs: FORCE_GRACE_MS });
-  const [serverTransport, clientTransport] = sdk.InMemoryTransport.createLinkedPair();
-  const host = new sdk.Client({ name: "phases-host", version: "1" });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const host = new Client({ name: "phases-host", version: "1" });
   await Promise.all([mcp.connect(serverTransport), host.connect(clientTransport)]);
-  const status = async (name, args) => JSON.parse((await sdk.callTool(host, { name, arguments: args })).content[0].text).status;
+  const status = async (name, args) => JSON.parse((await host.callTool({ name, arguments: args })).content[0].text).status;
 
   const abort = new AbortController();
   const progress = [];
-  const hostDone = sdk.callTool(
-    host,
+  const hostDone = host.callTool(
     { name: "delegate", arguments: { spec: SPEC, workspace, model: "model-b", contextFiles } },
     { signal: abort.signal, timeout: 30000, onprogress: (p) => progress.push(String(p.message ?? "")) },
   ).then(readResult, (error) => ({ rejected: String(error?.message ?? error) }));

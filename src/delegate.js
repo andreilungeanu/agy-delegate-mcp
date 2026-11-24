@@ -26,7 +26,7 @@ export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
 // edits and commands; the launch flag and the request router approve them.
 const AGY_MODE = { agent: "default", plan: "plan", ask: "default" };
 const ASK_PREAMBLE = "Answer the question below. Do not edit files or run commands that change state.";
-export const DEFAULT_HEARTBEAT_MS = 30000;
+const DEFAULT_HEARTBEAT_MS = 30000;
 
 // A malformed or non-positive value falls back to the default, so a blank var (Number("") is 0)
 // cannot arm a zero-length deadline.
@@ -157,7 +157,7 @@ async function sessionExists(client, sessionId) {
 // agy fails a session/new with this -32603 when agy processes start at the same time; on the same
 // process a second request 500 ms later opened the session (measured, agy 1.5.15).
 const STARTUP_RACE = /^Failed to start Antigravity conversation(:|$)/;
-export const SESSION_RETRY_MS = 500;
+const SESSION_RETRY_MS = 500;
 
 async function newSession(client, workspace, retryMs) {
   try {

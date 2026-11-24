@@ -138,13 +138,9 @@ export class AcpClient extends EventEmitter {
     this.sessionMeta = res?._meta;
     return res;
   }
-  // appendSystemPrompt goes in _meta.antigravity.systemPrompt.append. agy stores it with the session
-  // and ignores a _meta sent on resume (measured, agy 1.5.14).
-  /** @param {string} cwd @param {{ appendSystemPrompt?: string }} [opts] */
-  async newSession(cwd, { appendSystemPrompt } = {}) {
-    const params = { cwd, mcpServers: [] };
-    if (appendSystemPrompt) params._meta = { antigravity: { systemPrompt: { append: appendSystemPrompt } } };
-    const res = this._captureSession(await this._setup("session/new", params));
+  /** @param {string} cwd */
+  async newSession(cwd) {
+    const res = this._captureSession(await this._setup("session/new", { cwd, mcpServers: [] }));
     if (typeof res?.sessionId === "string") this._sessions.add(res.sessionId);
     return res;
   }
