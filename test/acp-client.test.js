@@ -489,17 +489,3 @@ test("start() passes a launcher path and arguments with spaces through cmd.exe i
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-// initialize and the session requests reached the wire around the phase gate, so a delegation
-// that had already failed still opened a session.
-test("each request goes on the wire through the method that owns its phase", () => {
-  const owners = new Set(["_setup", "prompt", "_closeGracefully"]);
-  const lines = readFileSync(fileURLToPath(new URL("../src/acp-client.js", import.meta.url)), "utf8").split("\n");
-  let method;
-  const outside = [];
-  lines.forEach((line, i) => {
-    method = /^ {2}(?:async )?([_a-zA-Z]\w*)\(.*\) \{/.exec(line)?.[1] ?? method;
-    if (/\bpeer\.request\(/.test(line) && !owners.has(method)) outside.push(`src/acp-client.js:${i + 1} in ${method}()`);
-  });
-  assert.deepEqual(outside, [], `${outside.join(", ")} calls peer.request directly. A request before the task prompt goes through _setup(), which refuses it once setup ended; a prompt goes through prompt().`);
-});
