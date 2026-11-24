@@ -482,7 +482,7 @@ function violations(c, o) {
 
   if (c.event === "exit") {
     if (c.barrier === "teardown") {
-      rule(finishedTask() && !warnings.some((w) => /did not see agy exit/.test(w)),
+      rule(finishedTask() && !warnings.some((w) => /could not confirm that agy and its processes exited/.test(w)),
         `agy exiting during its close leaves the result, with the exit seen (ed7de7b); got ${got} ${show(warnings)}`);
     } else {
       rule(reason === "agent-exit", `agy exiting fails the delegation as agent-exit (e0ed965); got ${got}`);

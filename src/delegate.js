@@ -767,7 +767,7 @@ export async function runDelegate({
     finally { signal?.removeEventListener("abort", abortClose); }
     if (exited === false) {
       const pid = client.child?.pid;
-      const note = `the bridge stopped agy${pid ? ` (pid ${pid})` : ""} but did not see agy exit; it may still be running.`;
+      const note = `the bridge stopped agy${pid ? ` (pid ${pid})` : ""} but could not confirm that agy and its processes exited; they may still be running.`;
       // The result or the error is already decided; the note rides on whichever is going out.
       if (failure) failure.notes.push(` Note: ${note}`);
       else if (out) (out.protocolWarnings ??= []).push(note);

@@ -1774,7 +1774,7 @@ test("onPromptSent carries why a resumed id ran as a fresh session, and nothing 
   assert.equal(notes[1], undefined);
 });
 
-test("onUnseenExit carries the note when the stop did not see agy exit", async () => {
+test("onUnseenExit carries the note when the stop could not confirm that agy and its processes exited", async () => {
   const notes = [];
   const out = await runDelegate({
     spec: "task", workspace: process.cwd(),
@@ -1782,7 +1782,7 @@ test("onUnseenExit carries the note when the stop did not see agy exit", async (
     onUnseenExit: (note) => notes.push(note),
   });
   assert.equal(notes.length, 1);
-  assert.match(notes[0], /did not see agy exit/);
+  assert.match(notes[0], /could not confirm that agy and its processes exited/);
   assert.ok(out.protocolWarnings.includes(notes[0]));
 });
 
@@ -2301,7 +2301,7 @@ test("an agent that does not exit after the stop is reported", async () => {
     },
   });
   assert.equal(stops, 1, "the stop retries its own kill");
-  assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
+  assert.ok(out.protocolWarnings?.some((w) => /could not confirm that agy and its processes exited/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
 test("a stop that rejects is reported like one that did not see the exit", async () => {
@@ -2319,14 +2319,14 @@ test("a stop that rejects is reported like one that did not see the exit", async
     },
   });
   assert.equal(stops, 1);
-  assert.ok(out.protocolWarnings?.some((w) => /did not see agy exit/.test(w)), JSON.stringify(out.protocolWarnings));
+  assert.ok(out.protocolWarnings?.some((w) => /could not confirm that agy and its processes exited/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
 // One case per note: the exit note (thrown before the session, stop sees no exit), the resume hint
 // (thrown once the session is open), and the reason and sign-in note (a JSON-RPC -32000).
 test("every note the bridge adds reaches the caller, whatever agy's side threw", async () => {
   const cases = [
-    { at: "start", thrown: Object.freeze(new Error("boom")), exited: false, notes: ["boom", "did not see agy exit"] },
+    { at: "start", thrown: Object.freeze(new Error("boom")), exited: false, notes: ["boom", "could not confirm that agy and its processes exited"] },
     { at: "prompt", thrown: Object.freeze(new Error("boom")), notes: ["boom", "Resume with resumeSessionId sess-frozen"] },
     { at: "prompt", thrown: "a bare string", notes: ["a bare string", "Resume with resumeSessionId sess-frozen"] },
     { at: "newSession", thrown: Object.freeze(Object.assign(new Error("auth required"), { code: -32000 })), reason: "not-signed-in", code: -32000, notes: ["auth required", "agy is not signed in"] },
