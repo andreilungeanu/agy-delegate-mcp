@@ -204,6 +204,51 @@ test("an error agy answers with names the request and its JSON-RPC code", async 
   );
 });
 
+test("a session/new agy fails at startup is sent once more, and the delegation runs", async () => {
+  const sent = [];
+  const out = await runDelegate({ spec: "do the thing", workspace: process.cwd(), sessionRetryMs: 10, clientFactory: () => startupRaceFactory(sent, "1") });
+  assert.equal(sent.filter((m) => m === "session/new").length, 2, sent.join());
+  assert.equal(sent.filter((m) => m === "session/prompt").length, 1, sent.join());
+  assert.match(out.sessionId, /^sess-/);
+});
+
+test("a second startup failure ends the delegation, naming the method and JSON-RPC code", async () => {
+  const sent = [];
+  await assert.rejects(
+    runDelegate({ spec: "do the thing", workspace: process.cwd(), sessionRetryMs: 10, clientFactory: () => startupRaceFactory(sent, "2") }),
+    (err) => {
+      assert.equal(err.reason, "agent-error");
+      assert.match(err.message, /^Failed to start Antigravity conversation \(session\/new JSON-RPC -32603\)/);
+      return true;
+    },
+  );
+  assert.equal(sent.filter((m) => m === "session/new").length, 2, sent.join());
+});
+
+test("a session/new failing with another -32603 is not sent again", async () => {
+  const sent = [];
+  await assert.rejects(runDelegate({ spec: "do the thing", workspace: process.cwd(), sessionRetryMs: 10, clientFactory: () => startupRaceFactory(sent, "1|database is locked") }));
+  assert.equal(sent.filter((m) => m === "session/new").length, 1, sent.join());
+});
+
+test("a cancel during the session/new retry wait ends the delegation without sending it", async () => {
+  const sent = [];
+  const ac = new AbortController();
+  const started = Date.now();
+  await assert.rejects(runDelegate({
+    spec: "do the thing", workspace: process.cwd(), sessionRetryMs: 3000, signal: ac.signal,
+    clientFactory: () => {
+      const client = startupRaceFactory(sent, "1");
+      const newSession = client.newSession.bind(client);
+      client.newSession = (...args) => newSession(...args).catch((err) => { ac.abort(); throw err; });
+      return client;
+    },
+  }));
+  assert.ok(Date.now() - started < 2500, `settled ${Date.now() - started} ms in, after the retry wait`);
+  await new Promise((resolve) => setTimeout(resolve, 3200));
+  assert.equal(sent.filter((m) => m === "session/new").length, 1, sent.join());
+});
+
 // A cancel with no call in flight for it to reject: the wire's own refusal is all that keeps the
 // task prompt off it.
 test("a cancel landing after setup's last reply sends no task prompt", async () => {

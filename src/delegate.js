@@ -154,8 +154,24 @@ async function sessionExists(client, sessionId) {
   }
 }
 
-async function openSession(client, resumeSessionId, workspace) {
-  if (!resumeSessionId) return client.newSession(workspace);
+// agy fails a session/new with this -32603 when agy processes start at the same time; on the same
+// process a second request 500 ms later opened the session (measured, agy 1.5.15).
+const STARTUP_RACE = /^Failed to start Antigravity conversation(:|$)/;
+export const SESSION_RETRY_MS = 500;
+
+async function newSession(client, workspace, retryMs) {
+  try {
+    return await client.newSession(workspace);
+  } catch (err) {
+    if (err?.reason || err?.code !== -32603 || !STARTUP_RACE.test(err?.message ?? "")) throw err;
+    await new Promise((resolve) => setTimeout(resolve, retryMs));
+    // After a cancel the wire has left setup, and the client refuses this without sending it.
+    return client.newSession(workspace);
+  }
+}
+
+async function openSession(client, resumeSessionId, workspace, retryMs) {
+  if (!resumeSessionId) return newSession(client, workspace, retryMs);
   try {
     await client.resumeSession(resumeSessionId, workspace);
     return { sessionId: resumeSessionId };
@@ -169,7 +185,7 @@ async function openSession(client, resumeSessionId, workspace) {
       );
     }
     // Kept, so the caller can tell a stale id from a mistyped one.
-    const fresh = await client.newSession(workspace);
+    const fresh = await newSession(client, workspace, retryMs);
     return { ...fresh, resumeError: `agy has no session ${resumeSessionId}` };
   }
 }
@@ -295,6 +311,7 @@ async function applyEffort(client, sessionId, model, value, modelOptions) {
  *   onProgress?: (message: string) => void,
  *   progressThrottleMs?: number, heartbeatMs?: number, signal?: AbortSignal,
  *   backgroundSettleMs?: number, backgroundContinueMs?: number, backgroundWaitMs?: number,
+ *   sessionRetryMs?: number,
  * }} [opts]
  */
 export async function runDelegate({
@@ -304,6 +321,7 @@ export async function runDelegate({
   onSessionReady, onPromptSent, onUnseenExit, onTurnEnd, onProgress, progressThrottleMs = 2000,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   signal,
+  sessionRetryMs = SESSION_RETRY_MS,
   // Quiet after agy's closing usage_update before its continuation counts as over, and how long
   // to wait for a continuation that never starts once every background call has finished.
   backgroundSettleMs = 2000,
@@ -487,7 +505,7 @@ export async function runDelegate({
     const res = await supervisor.supervise(async () => {
       await client.start();
       await client.initialize();
-      const sess = await openSession(client, resumeSessionId, workspace);
+      const sess = await openSession(client, resumeSessionId, workspace, sessionRetryMs);
       sessionId = sess.sessionId;
       resumeError = sess.resumeError;
       supervisor.setSessionId(sessionId);
