@@ -99,8 +99,6 @@ been quiet, the turn title, files reported edited, and a `resumeSessionId` — p
 earlier resume had already failed, meaning none of that work was in context. The raw ACP
 transcript is not included: nothing in it changes what you can do, and it is large. Set
 `AGY_DELEGATE_TRANSCRIPT=<frames>` to append it when debugging the bridge itself.
-`ACP_LOG_SIZE` bounds retention (2000 frames) and so caps what this can return; at `0` nothing
-is recorded and it returns nothing at all.
 
 ## Resume
 

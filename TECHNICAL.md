@@ -45,7 +45,6 @@ before the tool runs.
 | `agent.version` | `--version` output, or `null`. `found: false` means it is not installed; `found: true` with a `null` version means it exists but did not answer — `agent.error` says why. |
 | `agent.error` | Present only when `version` is `null` on a launcher that does exist, e.g. the probe timed out or `--version` exited non-zero. |
 | `runtime` | Node version, platform, architecture, cwd, and stdio transport. |
-| `env.ACP_LOG_SIZE` | Flight recorder size (default `2000`). |
 | `env.ACP_AGENT_COMMAND` / `env.ACP_AGENT_ARGS` | Launcher overrides, or `null` when unset. |
 | `env.AGY_DELEGATE_TRANSCRIPT` | Transcript frame count, or `null` when unset. |
 | `env.AGY_DELEGATE_HANDSHAKE_MS` / `HARD_CAP_MS` / `BACKGROUND_WAIT_MS` | Timeout knobs, or `null` when unset. |
@@ -101,7 +100,6 @@ diagnostic, not fail the call.
   text `contextFiles` and inline `image` blocks for images, gated on
   `promptCapabilities.image`.
 - **Long runs**: when the client passes a progress token, the bridge sends a progress notification every 30 s and on agent activity. Copilot CLI restarts its 180 s tool-call timer on each notification, Claude Code its 30 min idle window, and MCP TypeScript SDK clients only with `resetTimeoutOnProgress`. Deadlines that ignore progress: Codex `tool_timeout_sec` (default 300 s), Claude Code `MCP_TOOL_TIMEOUT` (default about 28 h). The Codex plugin sets `tool_timeout_sec` to 21660 s, so an `AGY_DELEGATE_HARD_CAP_MS` above 6 h 1 min still ends at Codex's deadline. Child exit fails fast with stderr.
-- **`ACP_LOG_SIZE`**: ring buffer of JSON-RPC frames (default `2000`; `0` disables). Bounds what `AGY_DELEGATE_TRANSCRIPT` can return, and frames are recorded only while that is set.
 
 ## Environment variables
 
@@ -109,7 +107,6 @@ diagnostic, not fail the call.
 | -------- | ----------- |
 | `ACP_AGENT_COMMAND` | Override agent launcher command (default `agy`). |
 | `ACP_AGENT_ARGS` | Override agent launcher args (default `acp --dangerously-skip-permissions --disable-telemetry`). |
-| `ACP_LOG_SIZE` | Flight recorder frame count (`0` = off). Recording runs only while `AGY_DELEGATE_TRANSCRIPT` is set. |
 | `AGY_DELEGATE_TRANSCRIPT` | Frames of raw ACP transcript to append to failure messages; unset = none. Contains prompts, tool inputs/outputs and agent messages — use it only when debugging the bridge itself. |
 | `AGY_DELEGATE_HANDSHAKE_MS` | Handshake deadline (default 60 s). |
 | `AGY_DELEGATE_HARD_CAP_MS` | Absolute delegation cap (default 6 h). |

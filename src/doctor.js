@@ -8,7 +8,6 @@ import { allowedValues, describeOptions } from "./model-options.js";
 
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
-const DEFAULT_LOG_SIZE = "2000";
 
 function formatArg(value) {
   const s = String(value);
@@ -191,7 +190,6 @@ export async function runDoctor({
       transport: "stdio",
     },
     env: {
-      ACP_LOG_SIZE: envReport("ACP_LOG_SIZE", DEFAULT_LOG_SIZE),
       ACP_AGENT_COMMAND: envReport("ACP_AGENT_COMMAND"),
       ACP_AGENT_ARGS: envReport("ACP_AGENT_ARGS"),
       AGY_DELEGATE_TRANSCRIPT: envReport("AGY_DELEGATE_TRANSCRIPT"),
