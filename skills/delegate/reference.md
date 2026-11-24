@@ -134,7 +134,7 @@ acting on it.
 | Guard | Default | Scope |
 | ----- | ------- | ----- |
 | Handshake deadline | 60 s | Spawn through session setup only, where silence really does mean a wedged agent. |
-| Hard cap | 6 h | Whole delegation, absolute. |
+| Hard cap | 6 h | Whole delegation, absolute. Stopping the agent afterwards takes up to 10 s more. |
 | Background wait | 10 min | agy moves a shell command that outlasts the wait it set for it (`WaitMsBeforeAsync`) to the background and ends the turn. The bridge keeps agy running until the command finishes and agy reports on it, then returns that report. |
 
 Overrides: `AGY_DELEGATE_HANDSHAKE_MS`, `AGY_DELEGATE_HARD_CAP_MS`, `AGY_DELEGATE_BACKGROUND_WAIT_MS`.
