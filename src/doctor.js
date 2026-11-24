@@ -83,6 +83,7 @@ export function probeAgentVersion(spawnSpec, timeoutMs = VERSION_PROBE_TIMEOUT_M
 }
 
 async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs, signal }) {
+  if (signal?.aborted) return { ok: false, error: "Handshake aborted by MCP host" };
   const workspaceDir = workspace || process.cwd();
   const client = clientFactory({ spawnSpec, cwd: workspaceDir });
   let timer;
@@ -131,11 +132,10 @@ async function runDeepHandshake({ spawnSpec, clientFactory, workspace, timeoutMs
     return { ok: false, error: err?.message || String(err) };
   } finally {
     clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
     // Awaited, so doctor returns once its agent is stopped or the stop's deadline passed. Graceful,
     // closing the handshake's session; after a timeout or abort it joins the kill already started.
-    // The abort listener stays on through the close, so an abort there forces the kill.
     try { await Promise.resolve(client.stop({ graceMs: signal?.aborted ? 0 : GRACEFUL_STOP_MS })); } catch {}
-    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -199,10 +199,7 @@ export async function runDoctor({
     },
   };
 
-  if (deep && signal?.aborted) {
-    // Already interrupted: no agent is started.
-    out.agent.handshake = { ok: false, error: "Handshake aborted by MCP host" };
-  } else if (deep) {
+  if (deep) {
     out.agent.handshake = await runDeepHandshake({
       spawnSpec,
       clientFactory,
