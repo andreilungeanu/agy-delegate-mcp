@@ -63,6 +63,7 @@ const taskStore = createTaskStore();
 // the parameter descriptions.
 export const SERVER_INSTRUCTIONS = `Delegate coding work to Antigravity (agy) through the delegate tool. Every permission the agent requests is auto-approved, in every mode: agent/plan/ask reach any file the user account can, and mode instructs the agent rather than limiting it. Scope workspace tightly and review the git diff after every run — filesReportedByEditTools carries only what the agent's edit tools reported; the diff is authoritative.`;
 
+// Strict: an unknown key is almost always a typo, and a dropped resumeSessionId starts a new session.
 export const delegateInputSchema = z.object({
   spec: z.string().trim().min(1, "spec must not be blank").describe("Task brief: goal, scope, fixed decisions quoted exactly, acceptance criteria. Sent as written. Point at files to read rather than pasting code, or attach them with contextFiles."),
   mode: z.enum(["agent", "plan", "ask"]).default("agent").describe("agent implements; plan writes a plan, returned as plan; ask answers. plan and ask are instructions to the agent, not limits."),
@@ -72,7 +73,7 @@ export const delegateInputSchema = z.object({
   // Open string: a model's levels are known only once it is selected, and are validated then.
   effort: z.string().trim().min(1).optional().describe("agy thinking level for the selected model (low, medium, high, xhigh). Levels differ per model; invalid values fail before the prompt and name the accepted set. Pass only when the user asks for agy effort — the host's own reasoning setting is unrelated."),
   contextFiles: z.array(z.string()).optional().describe("Paths to attach instead of pasting contents into spec. Text becomes references the agent may open; images (png/jpg/gif/webp, <5MB) are sent inline. Relative paths resolve against workspace but are not limited to it. Skips are reported in protocolWarnings, never fatal."),
-});
+}).strict();
 
 // Steers every turn the map holds under the id, as cancel does: a session id names all of them.
 export function steerSession(map, seen, sessionId, message) {
@@ -239,7 +240,7 @@ export function buildServer({
       inputSchema: z.object({
         sessionId: sessionIdInput,
         force: z.boolean().default(false).describe("Kill the agent process if the turn is still running after a short grace period."),
-      }),
+      }).strict(),
       title: "Cancel Antigravity delegation",
       annotations: {
         title: "Cancel Antigravity delegation",
@@ -291,7 +292,7 @@ export function buildServer({
       inputSchema: z.object({
         sessionId: sessionIdInput,
         message: z.string().trim().min(1, "message must not be blank").describe("The new instruction for agy."),
-      }),
+      }).strict(),
       title: "Steer Antigravity delegation",
       annotations: {
         title: "Steer Antigravity delegation",
@@ -317,7 +318,7 @@ export function buildServer({
           .boolean()
           .default(false)
           .describe("Run an ACP handshake (start → initialize → newSession) to verify the agent is usable and signed in; adds models, modes, the current model's options and the account tier."),
-      }),
+      }).strict(),
       title: "Diagnose Antigravity delegation setup",
       annotations: {
         title: "Diagnose Antigravity delegation setup",

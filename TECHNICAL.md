@@ -23,8 +23,8 @@ Every tool returns its payload as one compact JSON text block and declares no MC
 `structuredContent`, and hosts that read both fields put both copies into the model's context.
 The `cancel` and `steer` status vocabularies are published in their tool descriptions instead.
 A failed `delegate` returns `isError: true` with plain text: `delegate failed [<reason>]: <message>`
-(the bracket is absent when no reason was assigned). Invalid arguments are rejected by the MCP SDK
-before the tool runs.
+(the bracket is absent when no reason was assigned). Invalid arguments, and unknown input fields, are
+rejected by the MCP SDK before the tool runs.
 
 ### Other tools
 
