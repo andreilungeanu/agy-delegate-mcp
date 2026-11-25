@@ -1,6 +1,6 @@
 # Antigravity Delegate
 
-Delegate edits to Google Antigravity's CLI agent (`agy`) — your agent writes the brief and reviews the diff.
+**Ask Gemini what it thinks. Or hand it the work.**
 
 [![npm version](https://img.shields.io/npm/v/agy-delegate-mcp)](https://www.npmjs.com/package/agy-delegate-mcp)
 [![npm downloads](https://img.shields.io/npm/dt/agy-delegate-mcp)](https://www.npmjs.com/package/agy-delegate-mcp)
@@ -12,25 +12,56 @@ Delegate edits to Google Antigravity's CLI agent (`agy`) — your agent writes t
 
 <img src="assets/logo-light.png" alt="Antigravity Delegate logo" width="150" align="left" hspace="15">
 
-Antigravity Delegate is the MCP bridge that lets Claude Code, ChatGPT/Codex, Copilot — or any MCP client — hand implementation to **agy** over the Agent Client Protocol, then get a structured result back for review.
+Antigravity Delegate is the MCP bridge to **Google Antigravity's CLI agent (`agy`)**. From Claude Code, ChatGPT/Codex, Cursor, Copilot or any MCP client, your agent can ask Gemini for a second opinion, put one question to several models at once, or hand agy a task to plan or build, and get a structured result back from each call.
 
 <br clear="left">
 
-![You and your agent plan and review; the MCP delegate tool hands the brief to agy, which implements with Gemini models and edits your workspace; a clean result comes back with what changed, which files, and the plan, for your agent to review](assets/flow.png)
+## 🧠 Get a second opinion
 
-![Delegate result payload](assets/result-json.png)
+> Ask Gemini Neon high what it thinks about moving the session store to SQLite.
+
+agy reads the repo and answers in `ask` mode, and your agent sets that answer beside its own. You see where the two disagree before you choose a direction.
+
+Ask several at once, and your agent sends each the same brief in parallel, compares the answers, and checks the claims that matter:
+
+> Ask Gemini Neon and Gemini Flash whether we should split this service, and tell me where they disagree.
+
+With [Codex Delegate](https://github.com/andreilungeanu/codex-delegate-mcp) or [Cursor Delegate](https://github.com/andreilungeanu/cursor-delegate-mcp) installed too, the same prompt reaches GPT, Composer or Grok.
+
+## 🛠️ Hand off the work
+
+> Delegate to Antigravity: migrate src/api from callbacks to async/await and update the tests. Plan it first.
+
+Your agent writes the brief, agy edits the files, and your agent reads the diff and runs the tests before it reports back.
+
+- 📋 **Plan, approve, build** — `plan` mode returns agy's plan artifact in full as `plan`; once you approve, the same session implements it.
+- 💬 **Questions with options** — when agy needs a decision, the turn ends with its questions, their options and the one it recommends. Your agent answers by resuming the same session.
+- 🧭 **Steer mid-turn** — `steer` redirects a delegation that is still running, without starting over. It needs a host that can call tools while `delegate` runs, such as Claude Code with background tasks.
+
+![You and your agent plan and review; the MCP delegate tool hands the brief to agy, which implements with Gemini models and edits your workspace; a clean result comes back with what changed, which files, and the plan, for your agent to review](assets/flow.png)
 
 ## Features
 
-- 🤝 **Native plugins** — install into Claude Code, ChatGPT/Codex, or GitHub Copilot CLI and say *"delegate this to Antigravity"*. The shared skill teaches your agent how to delegate well.
-- 💬 **No stalled runs** — if agy needs to clarify, it ends the turn and returns the question as a normal result. Your agent answers by resuming the same session.
-- ⏳ **Runs in the background in Claude Code** — in an interactive Claude Code CLI session, `delegate` runs as an MCP task: the call returns once agy has the prompt, and the result arrives as a task notification when agy finishes.
-- 📦 **Named results** — final answer, changed files, session id, model and thinking level, returned as one compact JSON payload.
-- 📋 **Plan first** — `plan` mode: agy writes a plan, returned in full as `plan`; you review it, then the same session implements it.
-- 🔍 **Ask anything** — `ask` mode: Q&A over your codebase.
-- 🩺 **Self-diagnosing** — a `doctor` tool that reports what is missing, the models agy offers, and the account tier.
+- 📦 **Named results** — final answer, the files agy's edit tools reported changing, session id, model and thinking level, the commands agy ran with their exit codes, and token usage, returned as one compact JSON payload.
+- ⏳ **Runs in the background in Claude Code** — in the main session of the interactive Claude Code CLI, `delegate` runs as an MCP task: the call returns once agy has the prompt, and the result arrives as a task notification when agy finishes. Calls from subagents wait for the result.
+- 🖼️ **Attach what prose can't point at** — `contextFiles` sends screenshots, mockups and other files along with the brief.
+- 🔋 **Runs on your Antigravity plan** — delegated work uses the Google account agy is signed into, separate from your host's chat quota.
+- 🤝 **Native plugins** — install into Claude Code, ChatGPT/Codex, or GitHub Copilot CLI and say *"ask Gemini"* or *"delegate this to Antigravity"*. The shared skill teaches your agent to write the brief and review the result.
+- 🩺 **Self-diagnosing** — a `doctor` tool that reports what is missing and, with `deep: true`, the models agy offers and your account tier.
 
 `plan` and `ask` are instructions to the agent, and `workspace` is its working directory — [Security](SECURITY.md) and the [delegate reference](skills/delegate/reference.md) spell out what the bridge enforces and what it reports back.
+
+![Delegate result payload](assets/result-json.png)
+
+## The Delegate family
+
+Each plugin works on its own. Install the ones your subscriptions cover, and your agent can ask them the same question in one turn.
+
+| Plugin | Brings in | Stands out for |
+| --- | --- | --- |
+| [Codex Delegate](https://github.com/andreilungeanu/codex-delegate-mcp) | OpenAI Codex CLI · GPT models | native code review, schema-validated plans |
+| [Cursor Delegate](https://github.com/andreilungeanu/cursor-delegate-mcp) | Cursor CLI · Composer, Grok | plan then build in one session, todo progress, image attachments |
+| **Antigravity Delegate** (this one) | Antigravity CLI · Gemini | steering a running turn, structured questions, plan artifacts |
 
 ## Install
 
