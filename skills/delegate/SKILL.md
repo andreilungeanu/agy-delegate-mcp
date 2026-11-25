@@ -1,150 +1,62 @@
 ---
 name: delegate
 description: >
-  Delegate implementation to Google Antigravity via the agy-delegate-mcp MCP delegate tool.
-  Use when the user says delegate to Antigravity, agy, or Gemini; have Antigravity
-  handle or do this; offload this; send this to agy; use Antigravity/Gemini for
-  coding; hand off implementation; plan before building; ask Antigravity a question
-  about the codebase; resume a delegation session; or diagnose delegation that is failing
-  or not set up. Do not shell out to agy — use the delegate MCP tool.
+  Ask Google Antigravity (agy, Gemini) for its view or hand it coding work through the
+  agy-delegate-mcp delegate tool. Use when the user says ask Gemini or Antigravity what it
+  thinks, get Gemini's view or a second opinion, delegate or hand off to agy, plan with
+  Antigravity, resume an agy session, or diagnose agy delegation. Do not shell out to agy.
 license: MIT
 ---
 
 # Delegate to Antigravity
 
-You orchestrate; Antigravity implements. Use the **agy-delegate-mcp** MCP server — never run
-`agy` from the shell.
+Call the agy-delegate-mcp `delegate` tool; never run `agy` from the shell.
 
-## When to delegate
+## Write the brief
 
-Delegate when the user wants Antigravity to edit the repo (they may say **Antigravity**,
-**agy**, or **Gemini** — same handoff). Not for the MCP host's own subagents —
-use the `delegate` MCP tool to reach agy only.
+`spec` carries the whole task, inline:
 
-Scale effort to the task:
+- **Goal**: the outcome, precisely.
+- **Scope**: the files and directories in play. Point at files to read or follow rather than
+  pasting code; attach images and documents outside the repo with `contextFiles`.
+- **Decisions**: what the user already settled, in their exact words.
+- **Done when**: verifiable acceptance criteria, and the tests to run while it works. For `ask` and
+  `plan`, the form and length of the answer.
+- End by asking agy to report any criterion it could not meet and any assumption it made.
 
-- **Trivial** (one-liner, rename, typo): do it yourself — delegation overhead exceeds the task.
-- **Medium** (multi-file feature or refactor): one `delegate` call.
-- **Large or risky** (architecture, wide rewrites): `mode: "plan"` first; implement after approval.
-- Never delegate a task you cannot write acceptance criteria for.
-- Purely advisory questions → `mode: "ask"`; plan with no file writes → `mode: "plan"`.
-  For these, state what form the answer or plan should take — there's no diff, so the
-  output format is the deliverable.
+`workspace` is the smallest existing directory that holds the task's files.
 
-## Workflow
+## Ask and compare
 
-1. **Build the brief inline** — pass task text in `spec` that answers all four, and asks
-   for one thing back:
-   - **Goal** — the outcome, precisely.
-   - **Scope** — which files/directories are in play.
-   - **Decisions already made** — constraints and fixed choices the user stated or implied.
-     This is what prevents wrong assumptions and clarifying questions. Transmit them
-     faithfully; don't invent constraints the user didn't state.
-   - **Done when** — verifiable acceptance criteria, stated as end state. Have agy run
-     tests as it works; that loop is what makes the code good. Its report is not evidence,
-     though — you re-check in step 3, because command output never crosses the ACP wire and
-     the author of a change is not an independent verifier of it.
-   - **Gaps to report back** — close the brief by asking for any acceptance criterion it
-     could not meet and any assumption it had to make. Assumptions are the one thing no
-     response field captures.
+`mode: "ask"` answers a question or gives a second opinion; `result` is the answer. To compare
+models, send the same brief in parallel calls, one `model` per call or another plugin's
+`delegate` tool, then set the answers side by side with your own view. Check the claims that
+matter before relaying them.
 
-   **Point, don't paste**: reference files to read or mimic ("follow the middleware
-   pattern in src/api/middleware/auth.js") instead of pasting code — agy reads the
-   repo itself; the brief carries judgment, not content. For images, and for documents
-   outside the repo, prose cannot point at all — attach those with `contextFiles`.
+## Hand off the work
 
-   **Quote, don't paraphrase**: when the user states exact values or behaviors
-   (delimiters, limits, error messages, response wording, timestamp formats), carry their
-   words verbatim into the brief — paraphrase silently drops decisions. Example brief:
+- `agent` implements.
+- `plan`: `plan.detail` is the plan and `result` is agy's note on it, often open questions.
+  Present both, wait for approval, then resume the session in `agent` mode with
+  `resumeSessionId` and a `spec` such as "implement the approved plan" plus any changes.
+- `steer` redirects a turn that is still running. Once the turn has ended, resume instead.
 
-   > Goal: per-user rate limiting on all REST endpoints. Scope: src/api/middleware/,
-   > src/config/. Read src/api/middleware/auth.js first and follow that middleware
-   > pattern. Decisions: sliding window, config-driven; user's words: "100 requests per
-   > minute, 429 with body {"error":"rate_limited"}"; no new dependencies. Done when:
-   > every endpoint is covered and a unit test for the limiter is added, with no existing
-   > test changed.
+Parallel runs that write need separate directories; otherwise run them one after another.
 
-   Do not create a spec file unless the user wants one saved in the repo.
-2. **Call `delegate`** on the agy-delegate-mcp MCP server with that text in `spec`.
-3. **Review** — read `filesReportedByEditTools` (absent when no edit tool reported a change),
-   inspect the git diff, run tests/lint **yourself**,
-   and check the result against the brief's acceptance criteria.
-   - Review the git diff after **every** run before reporting a plan-only outcome, whatever
-     mode you asked for: `plan` and `ask` are instructions to the agent, not enforced
-     boundaries.
-   - `effectiveModel` names the model agy ran when it differs from `model`, and always when
-     `model` was omitted.
-   - `effectiveEffort` is the thinking level agy reported in force. Without `effort`, the model
-     runs at agy's level for it, so report that value rather than calling it the default.
-   - If criteria fail: resume the **same session** with the specific failure
-     ("tests X and Y fail with <error>; fix without changing the public API") — not a
-     re-run of the whole brief.
-   - After 2 failed resume attempts, start a fresh session with a rewritten brief.
-   - Report the honest outcome either way.
+## After the run
 
-   On failure the error is tagged `delegate failed [reason]: …` — argument errors are fixed, not
-   retried; stalls and exits resume the id named in the message. reference.md maps every reason
-   to its action.
-4. **Report** — summarize what changed and whether acceptance criteria are met.
+1. Read the git diff after every run, whatever the mode, and run the tests yourself when files
+   changed. `filesReportedByEditTools` misses files written by shell commands.
+2. `effectiveModel` names the model agy ran when it differs from `model`, and always when
+   `model` was omitted. `effectiveEffort` is the level in force; report it rather than calling
+   it the default.
+3. If a criterion fails on a sound approach, resume the same session with the specific
+   failure. For a wrong approach, after two failed resumes, or when `context.used` nears
+   `context.size`, start a new session with a rewritten brief. After a resume, an absent
+   `resumed` means that run had no prior context: send the full brief on the returned
+   `sessionId`.
+4. Report what changed and which criteria pass.
 
-For the failure-reason table, full input and output fields, timeouts, and debugging env
-vars, read [reference.md](reference.md) in this skill directory.
-
-## Defaults
-
-
-| Parameter   | Default                |
-| ----------- | ---------------------- |
-| `mode`      | `agent`                |
-| `model`     | agy's default model; on resume, the model this server last set on the session |
-| `effort`    | agy's level for it; on resume, the effort last set, unless `model` changes |
-| `workspace` | required               |
-
-
-Pass `model` only when the user requests one. Use the base id (`gemini-4-neon`,
-`gemini-3.8-flash`); agy's level-suffixed ids (`gemini-4-neon-high`) are rejected — the level
-is `effort`. Levels are exact and model-specific; an invalid one fails before the prompt and
-names what the model accepts. `workspace` is the smallest directory holding the task's files;
-with no such directory the project root is the floor.
-
-## Plan mode
-
-1. `delegate(spec, mode="plan")` → save `sessionId`; `plan.detail` is the plan, `result` is
-   agy's message about it (often open questions).
-2. Present the plan to the user; wait for approval or change requests.
-3. `delegate("implement the approved plan", mode="agent", resumeSessionId=<sessionId>)`
-  — or resume with explicit change requests in the spec.
-
-## Resume vs new session
-
-- **New session (default):** wrong approach, failed run, or substantial rework — pass a fresh inline brief.
-- **`resumeSessionId`:** only when the prior run was on the right track and needs a small
-clarification or follow-up in the same session. An id agy does not have falls back to a new session.
-A `context.used` near `context.size` also calls for a new session.
-- Never guess a `resumeSessionId`. After any resume call, check `resumed` in the
-response — if it is **absent** (not `true`), the run had **zero** prior context, so re-send a
-full brief. `protocolWarnings` says why the resume fell back.
-
-## Clarifying questions
-
-When agy needs a decision it asks and ends the turn. A question asked through agy's question tool
-arrives in `questions`, with its options and the one agy recommends, if any; a question asked in
-prose only is in `result`. Answer by resuming the **same session** with a free-text answer in
-`spec` — you are not limited to the options agy listed.
-
-## Security
-
-Every permission the agent requests is auto-approved, in every mode. `workspace` is the working
-directory, not a reach limit — pass the smallest directory holding the task's files, never
-`$HOME`, `/`, or one created for the call. `contextFiles` resolve against `workspace` but are
-not confined to it; attachments are untrusted (the bridge does not scan for prompt injection).
-
-## Other MCP tools
-
-- **`doctor`** — setup diagnostics when the user asks or delegation fails (`agent.found`, version, client capabilities; `deep: true` for handshake, models and account tier).
-- **`cancel`** — best-effort cancel by `sessionId`. Needs a host that can call tools while
-  `delegate` runs. If the agent ignores it and keeps going, call again with `force: true`
-  to kill the process after a grace period.
-- **`steer`** — redirect a running delegation by `sessionId` with a new instruction; `delegate`
-  (or its task) then returns the redirected turn. Needs a host that can call tools while `delegate`
-  runs; after the turn ends, resume instead.
+A failure arrives as `delegate failed [reason]: …`. Fix `invalid-spec`, `invalid-workspace`,
+`invalid-mode` and `unknown-model` rather than retrying; every other reason, and any unfamiliar
+field, is explained in [reference.md](reference.md).
