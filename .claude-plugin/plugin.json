@@ -3,7 +3,7 @@
   "name": "agy-delegate",
   "displayName": "Antigravity Delegate",
   "version": "2.1.0",
-  "description": "Delegate coding tasks to Antigravity's agy over ACP, with structured results, plan mode, and clarification handling.",
+  "description": "Ask Gemini what it thinks, or hand it the work: second opinions, plans and edits by Google Antigravity (agy).",
   "author": {
     "name": "Andrei Lungeanu",
     "email": "andrei@lungeanu.ro"

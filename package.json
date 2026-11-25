@@ -3,7 +3,7 @@
   "version": "2.1.0",
   "mcpName": "io.github.andreilungeanu/agy-delegate-mcp",
   "type": "module",
-  "description": "Delegate multi-file coding work from Claude Code, Codex, Copilot, or any MCP client to Google's Antigravity CLI (agy) — structured results, plan mode, and changed files.",
+  "description": "Ask Gemini what it thinks, or hand it the work. Second opinions, plans and edits by Google Antigravity's CLI (agy), inside Claude Code, Codex, Cursor or any MCP client.",
   "license": "MIT",
   "author": "Andrei Lungeanu <andrei@lungeanu.ro>",
   "repository": {

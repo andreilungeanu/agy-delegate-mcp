@@ -10,7 +10,7 @@
     {
       "name": "agy-delegate",
       "source": "./",
-      "description": "MCP server bridging AI coding hosts to Antigravity's agy over ACP.",
+      "description": "Ask Gemini what it thinks, or hand it the work: second opinions, plans and edits by Google Antigravity (agy).",
       "license": "MIT",
       "keywords": [
         "mcp",

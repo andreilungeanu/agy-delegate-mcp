@@ -21,7 +21,7 @@ const SERVER_ICONS = [
 const SERVER_INFO = {
   name: "agy-delegate-mcp",
   title: "Antigravity Delegate",
-  description: "Bridge AI coding hosts to Google Antigravity's agy over the Agent Client Protocol.",
+  description: "Ask Google Antigravity (agy) for a second opinion, or hand it plans and edits.",
   version: VERSION,
   websiteUrl: "https://github.com/andreilungeanu/agy-delegate-mcp",
   icons: SERVER_ICONS,

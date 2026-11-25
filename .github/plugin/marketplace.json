@@ -5,13 +5,13 @@
     "email": "andrei@lungeanu.ro"
   },
   "metadata": {
-    "description": "Plugins for delegating coding work to Antigravity through MCP.",
+    "description": "Plugins for asking Antigravity for second opinions and handing it coding work through MCP.",
     "version": "2.1.0"
   },
   "plugins": [
     {
       "name": "agy-delegate",
-      "description": "Delegate local coding work to Google Antigravity's CLI agent (agy) through MCP and ACP.",
+      "description": "Ask Gemini what it thinks, or hand it the work: second opinions, plans and edits by Google Antigravity (agy).",
       "version": "2.1.0",
       "source": "./"
     }

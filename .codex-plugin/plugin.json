@@ -1,7 +1,7 @@
 {
   "name": "agy-delegate",
   "version": "2.1.0",
-  "description": "Delegate local coding work to Google Antigravity's CLI agent (agy) through MCP and ACP.",
+  "description": "Ask Gemini what it thinks, or hand it the work: second opinions, plans and edits by Google Antigravity (agy).",
   "author": {
     "name": "Andrei Lungeanu",
     "email": "andrei@lungeanu.ro",
