@@ -1,6 +1,6 @@
 # Antigravity Delegate
 
-**Ask Gemini what it thinks. Or hand it the work.**
+**Turn your coding agent into a council. Bring Gemini Neon and Hydrogen into the conversation, then hand them the work.**
 
 [![npm version](https://img.shields.io/npm/v/agy-delegate-mcp)](https://www.npmjs.com/package/agy-delegate-mcp)
 [![npm downloads](https://img.shields.io/npm/dt/agy-delegate-mcp)](https://www.npmjs.com/package/agy-delegate-mcp)
