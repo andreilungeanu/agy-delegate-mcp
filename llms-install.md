@@ -33,7 +33,7 @@ No API keys and no environment variables are required. Auth is agy's own sign-in
 
 ## Verify
 
-Call the `doctor` tool. It reports the Node version and how `agy` resolves on PATH, naming whatever is missing. Call it with `deep: true` to run an ACP handshake — that is what proves agy is signed in, and a clean deep `doctor` means `delegate` is ready.
+Call the `doctor` tool. It reports how `agy` resolves on PATH and lists whatever needs action in `warnings`. Call it with `deep: true` to also open an ACP session — that is what proves agy is signed in and names the plan; a deep `doctor` with empty `warnings` means `delegate` is ready.
 
 ## Optional environment variables
 

@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `doctor deep` reports whether agy is signed in (`auth.status`: `ok`, or `logged-out` on ACP's
+  `auth_required`) and the account tier as `auth.plan`, and checks that the account offers the
+  default model.
+- `doctor` takes a `workspace` argument it checks and opens the deep session in, and lists what
+  needs action in `warnings`: launcher missing or silent, not signed in, a missing workspace, a
+  failed handshake, a default model the account lacks.
+
+### Changed
+
+- `doctor` output follows the shape shared with `codex-delegate-mcp` and `cursor-delegate-mcp`.
+  `agent.handshake` is replaced by top-level `session` (`ok`, `error`, `modes`) and `models`
+  (`default`, `defaultAvailable`, `current`, `available`, `currentModelOptions`); the tier moves to
+  `auth.plan`.
+- `doctor` leaves out what rarely changes a diagnosis: the client's capabilities, the runtime
+  section, the agent's ACP protocol version and capabilities, and unset environment variables.
+
 ## [2.2.0] - 2026-11-25
 
 ### Added

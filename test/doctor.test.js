@@ -9,20 +9,19 @@ import { z } from "zod";
 import { runDoctor as rawRunDoctor } from "../src/doctor.js";
 import { AcpClient } from "../src/acp-client.js";
 import { isChildAlive } from "../src/proc.js";
-import { doctorOutputShape, doctorAgentShape, doctorHandshakeShape } from "./output-shapes.js";
+import { doctorOutputShape, doctorAgentShape, doctorSessionShape, doctorModelsShape } from "./output-shapes.js";
 import { VERSION } from "../src/version.js";
+import { DEFAULT_MODEL } from "../src/delegate.js";
 
 // Every result this suite produces is parsed against a strict copy of doctorOutputShape, for
 // the reason delegate.test.js does the same: the shape is not declared to hosts, so a field
 // added to the result but forgotten there would drift undocumented and no test would fail.
-// agent and handshake are each made strict, because .strict() does not look inside a nested
-// object and both levels have drifted — agent in 1.14.0, handshake with currentModelOptions.
+// Each nested object is made strict too, because .strict() does not look inside one.
 const strictOutput = z.object({
   ...doctorOutputShape,
-  agent: z.object({
-    ...doctorAgentShape,
-    handshake: z.object(doctorHandshakeShape).strict().optional(),
-  }).strict(),
+  agent: z.object(doctorAgentShape).strict(),
+  session: z.object(doctorSessionShape).strict().optional(),
+  models: z.object(doctorModelsShape).strict().optional(),
 }).strict();
 const runDoctor = async (opts) => {
   const out = await rawRunDoctor(opts);
@@ -48,7 +47,7 @@ test("runDoctor reports agent.found, command, and version for a present launcher
   assert.equal(out.agent.found, true);
   assert.match(out.agent.command, /agent-stub\.js/);
   assert.equal(out.agent.version, "fake-agent 2.0.0");
-  assert.equal(out.agent.handshake, undefined);
+  assert.equal(out.session, undefined);
 });
 
 test("runDoctor reports agent.version null when the command fails", async () => {
@@ -137,7 +136,7 @@ test("runDoctor reads the version of a launcher that floods stderr", async () =>
   assert.equal(out.agent.error, undefined);
 });
 
-test("runDoctor reports raw client capabilities and identity from injected getClientInfo", async () => {
+test("runDoctor reports the client's identity and protocol revision, not its capabilities", async () => {
   const withElicit = await runDoctor({
     spawnSpec: stubSpawnSpec(),
     getClientInfo: () => ({
@@ -146,16 +145,12 @@ test("runDoctor reports raw client capabilities and identity from injected getCl
       protocolVersion: "2026-07-28",
     }),
   });
-  assert.deepEqual(withElicit.client.capabilities, { elicitation: {} });
-  assert.equal(withElicit.client.protocolVersion, "2026-07-28");
-  assert.equal(withElicit.client.name, "test-client");
-  assert.equal(withElicit.client.version, "1.0");
+  assert.deepEqual(withElicit.client, { name: "test-client", version: "1.0", protocolVersion: "2026-07-28" });
 
   const withoutElicit = await runDoctor({
     spawnSpec: stubSpawnSpec(),
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
-  assert.deepEqual(withoutElicit.client.capabilities, {});
   assert.equal("protocolVersion" in withoutElicit.client, false, "absent, not null, when the host named none");
 });
 
@@ -177,7 +172,8 @@ test("runDoctor deep:false does not run handshake", async () => {
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
   assert.equal(handshakeCalls, 0);
-  assert.equal(out.agent.handshake, undefined);
+  assert.equal(out.session, undefined);
+  assert.equal(out.models, undefined);
 });
 
 test("runDoctor deep:true runs handshake via clientFactory", async () => {
@@ -198,25 +194,22 @@ test("runDoctor deep:true runs handshake via clientFactory", async () => {
     workspace: process.cwd(),
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
-  assert.deepEqual(out.agent.handshake, {
-    ok: true,
-    protocolVersion: null,
-    agentCapabilities: {},
-    models: [],
-    currentModel: null,
+  assert.deepEqual(out.session, { ok: true, modes: [] });
+  assert.deepEqual(out.models, {
+    default: DEFAULT_MODEL,
+    defaultAvailable: null,
+    current: null,
+    available: [],
     currentModelOptions: [],
-    modes: [],
-    tier: null,
   });
+  assert.deepEqual(out.auth, { status: "ok" }, "a session that opened is signed in; no tier, no plan");
   assert.ok(calls.includes("start"));
   assert.ok(calls.includes("initialize"));
   assert.ok(calls.includes("newSession"));
   assert.ok(calls.includes("stop"));
 });
 
-// The test above leaves configOptions unset, so it only ever proves the empty case. This drives
-// the filter and map that build the field: model and mode are reported as their own handshake
-// keys, so they are dropped here, and each remaining option keeps only its string values.
+// model and mode are reported as models.current and session.modes, so they are dropped here.
 test("runDoctor deep:true reports currentModelOptions without the model and mode keys", async () => {
   const clientFactory = () => ({
     start: async () => {},
@@ -237,7 +230,7 @@ test("runDoctor deep:true reports currentModelOptions without the model and mode
     workspace: process.cwd(),
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
-  assert.deepEqual(out.agent.handshake.currentModelOptions, [
+  assert.deepEqual(out.models.currentModelOptions, [
     { id: "fast", values: ["false", "true"] },
     // 7 is dropped: a non-string value is not something a caller can pass back.
     { id: "thinking", values: ["high"] },
@@ -267,7 +260,7 @@ test("runDoctor deep:true reports option name, category and current value when s
     workspace: process.cwd(),
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
-  assert.deepEqual(out.agent.handshake.currentModelOptions, [
+  assert.deepEqual(out.models.currentModelOptions, [
     {
       id: "reasoning_effort", name: "Effort", category: "thought_level",
       values: ["low", "medium", "high", "xhigh"], currentValue: "high",
@@ -289,8 +282,10 @@ test("runDoctor deep:true reports handshake error without throwing", async () =>
     clientFactory,
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
-  assert.equal(out.agent.handshake.ok, false);
-  assert.match(out.agent.handshake.error, /not logged in/);
+  assert.equal(out.session.ok, false);
+  assert.match(out.session.error, /not logged in/);
+  assert.ok(out.warnings.some((w) => /handshake failed: not logged in/.test(w)));
+  assert.equal(out.models, undefined);
 });
 
 test("runDoctor deep:true times out a hanging handshake and stops the client", async () => {
@@ -308,22 +303,22 @@ test("runDoctor deep:true times out a hanging handshake and stops the client", a
     handshakeTimeoutMs: 50,
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
-  assert.equal(out.agent.handshake.ok, false);
-  assert.match(out.agent.handshake.error, /timed out after 50ms/);
+  assert.equal(out.session.ok, false);
+  assert.match(out.session.error, /timed out after 50ms/);
   assert.ok(stopCalls >= 1, "expected the hanging client to be stopped");
 });
 
-test("runDoctor reports the plugin version and the env knobs", async () => {
+test("runDoctor reports the plugin version, and the env knobs only when set", async () => {
   const out = await runDoctor({
     spawnSpec: stubSpawnSpec(),
     getClientInfo: () => ({ capabilities: {}, version: {} }),
+    env: { AGY_DELEGATE_BACKGROUND_WAIT_MS: "5000", UNRELATED: "1" },
   });
   assert.equal(out.plugin.version, VERSION);
-  assert.ok("ACP_AGENT_COMMAND" in out.env);
-  assert.ok("ACP_AGENT_ARGS" in out.env);
-  assert.ok("AGY_DELEGATE_HANDSHAKE_MS" in out.env);
-  assert.ok("AGY_DELEGATE_HARD_CAP_MS" in out.env);
-  assert.ok("AGY_DELEGATE_BACKGROUND_WAIT_MS" in out.env);
+  assert.deepEqual(out.env, { AGY_DELEGATE_BACKGROUND_WAIT_MS: "5000" });
+
+  const quiet = await runDoctor({ spawnSpec: stubSpawnSpec(), env: {} });
+  assert.equal("env" in quiet, false);
 });
 
 test("runDoctor reads the plugin version fresh rather than from a load-time constant", async () => {
@@ -337,19 +332,38 @@ test("runDoctor reads the plugin version fresh rather than from a load-time cons
   assert.equal(out.plugin.version, "9.9.9-fresh");
 });
 
-test("runDoctor reports portable runtime diagnostics", async () => {
-  const out = await runDoctor({
-    getClientInfo: () => ({ capabilities: { elicitation: {} }, version: { name: "host", version: "1" } }),
-    spawnSpec: stubSpawnSpec(),
-  });
-
-  assert.equal(out.runtime.transport, "stdio");
-  assert.equal(out.runtime.node, process.versions.node);
-  assert.equal(out.runtime.platform, process.platform);
-  assert.deepEqual(out.client.capabilities, { elicitation: {} });
+test("runDoctor flags a workspace that is not there", async () => {
+  const out = await runDoctor({ spawnSpec: stubSpawnSpec(), workspace: join(tmpdir(), "no-such-workspace-xyz") });
+  assert.equal(out.workspace.exists, false);
+  assert.ok(out.warnings.some((w) => w.startsWith("workspace does not exist")));
 });
 
-test("runDoctor deep:true reports the negotiated capability matrix", async () => {
+test("runDoctor leaves login unknown without deep: agy has no status command", async () => {
+  const out = await runDoctor({ spawnSpec: stubSpawnSpec() });
+  assert.deepEqual(out.auth, { status: "unknown" });
+  assert.deepEqual(out.warnings, []);
+});
+
+test("runDoctor deep:true reads agy's auth_required as signed out", async () => {
+  const clientFactory = () => ({
+    start: async () => {},
+    initialize: async () => {},
+    newSession: async () => { throw Object.assign(new Error("Authentication required"), { code: -32000 }); },
+    stop: () => {},
+  });
+  const out = await runDoctor({ deep: true, spawnSpec: stubSpawnSpec(), clientFactory });
+  assert.deepEqual(out.auth, { status: "logged-out" });
+  assert.equal(out.session.ok, false);
+  assert.deepEqual(out.warnings, ["agy is not signed in. Run `agy` once in a terminal and sign in."]);
+});
+
+test("runDoctor warns about a launcher it cannot find", async () => {
+  const out = await runDoctor({ spawnSpec: { command: "nonexistent-agent-xyz-12345", args: ["acp"], options: {} } });
+  assert.deepEqual(out.auth, { status: "unknown" });
+  assert.ok(out.warnings.some((w) => /not found/.test(w)));
+});
+
+test("runDoctor deep:true reports the models and modes the session offers", async () => {
   const clientFactory = () => ({
     start: async () => {},
     initialize: async function () {
@@ -370,18 +384,32 @@ test("runDoctor deep:true reports the negotiated capability matrix", async () =>
     workspace: process.cwd(),
     getClientInfo: () => ({ capabilities: {}, version: {} }),
   });
-  assert.equal(out.agent.handshake.ok, true);
-  assert.equal(out.agent.handshake.protocolVersion, 1);
-  assert.equal(out.agent.handshake.currentModel, "gemini-4-neon-high");
-  assert.deepEqual(out.agent.handshake.models, ["gemini-4-neon-high", "claude-opus-5-5-high"]);
-  assert.deepEqual(out.agent.handshake.modes, ["default", "accept-edits", "auto", "plan"]);
-  assert.equal(out.agent.handshake.agentCapabilities.sessionCapabilities.list !== undefined, true);
+  assert.deepEqual(out.session, { ok: true, modes: ["default", "accept-edits", "auto", "plan"] });
+  assert.equal(out.models.current, "gemini-4-neon-high");
+  assert.deepEqual(out.models.available, ["gemini-4-neon-high", "claude-opus-5-5-high"]);
+  assert.equal(out.models.defaultAvailable, false);
+});
+
+test("runDoctor deep:true names the model agy falls back to when the account lacks the default", async () => {
+  const clientFactory = () => ({
+    start: async () => {},
+    initialize: async () => {},
+    newSession: async function () {
+      this.configOptions = [{ id: "model", currentValue: "gemini-4-neon", options: [{ value: "gemini-4-neon" }] }];
+      return { sessionId: "s" };
+    },
+    stop: () => {},
+  });
+  const out = await runDoctor({ deep: true, spawnSpec: stubSpawnSpec(), clientFactory });
+  assert.equal(out.models.defaultAvailable, false);
+  assert.deepEqual(out.warnings, [
+    `The default model ${DEFAULT_MODEL} is not among the models this account offers; a delegation that names no model runs agy's default (gemini-4-neon).`,
+  ]);
 });
 
 // agy 1.5.13's session/new: availableModels carries every model with a level suffix, while the
-// model config option carries the base ids delegate's model takes. doctor lists the base ids,
-// reports the option's current value, and relays the account tier from _meta.antigravity.
-test("runDoctor deep:true lists agy's base model ids and reports the account tier", async () => {
+// model config option carries the base ids delegate's model takes.
+test("runDoctor deep:true lists agy's base model ids and reports the account tier as the plan", async () => {
   const clientFactory = () => ({
     start: async () => {},
     initialize: async () => {},
@@ -398,12 +426,12 @@ test("runDoctor deep:true lists agy's base model ids and reports the account tie
     stop: () => {},
   });
   const out = await runDoctor({ deep: true, spawnSpec: stubSpawnSpec(), clientFactory, workspace: process.cwd() });
-  assert.deepEqual(out.agent.handshake.models, ["gemini-4-neon", "gemini-3.8-flash"]);
-  assert.equal(out.agent.handshake.currentModel, "gemini-4-neon");
-  assert.deepEqual(out.agent.handshake.currentModelOptions, [
+  assert.deepEqual(out.models.available, ["gemini-4-neon", "gemini-3.8-flash"]);
+  assert.equal(out.models.current, "gemini-4-neon");
+  assert.deepEqual(out.models.currentModelOptions, [
     { id: "thought_level", name: "Thinking Level", category: "thought_level", values: ["low", "high"], currentValue: "high" },
   ]);
-  assert.deepEqual(out.agent.handshake.tier, { name: "Google AI Pro", id: "g1-pro-tier" });
+  assert.deepEqual(out.auth, { status: "ok", plan: "Google AI Pro" });
 });
 
 test("runDoctor deep stops the agent at once when the host aborts", async () => {
@@ -420,8 +448,8 @@ test("runDoctor deep stops the agent at once when the host aborts", async () => 
     })),
   });
   assert.ok(Date.now() - started < 3000, `doctor took ${Date.now() - started} ms after the abort`);
-  assert.equal(out.agent.handshake.ok, false);
-  assert.match(out.agent.handshake.error, /aborted/);
+  assert.equal(out.session.ok, false);
+  assert.match(out.session.error, /aborted/);
   assert.ok(!isChildAlive(client.child));
 });
 
@@ -439,7 +467,7 @@ test("runDoctor stops a hung version probe on abort and starts no handshake afte
   });
   assert.ok(Date.now() - started < 3000, `doctor took ${Date.now() - started} ms after the abort`);
   assert.equal(factoryCalls, 0, "no handshake may start after the abort");
-  assert.match(out.agent.handshake?.error ?? "", /aborted/);
+  assert.match(out.session?.error ?? "", /aborted/);
 });
 
 // An abort that had already fired still spawned the probe, and the abort's result won the race

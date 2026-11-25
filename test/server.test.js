@@ -921,15 +921,11 @@ test("doctor tool passes deep and client info through to runDoctor", async () =>
   const runDoctor = async (opts) => {
     captured = opts;
     return {
-      plugin: { version: "test" },
-      client: {
-        name: "doctor-test-client",
-        version: "9.9",
-        capabilities: {},
-      },
+      plugin: { name: "agy-delegate-mcp", version: "test" },
+      client: { name: "doctor-test-client", version: "9.9" },
       agent: { found: true, command: "agy acp --dangerously-skip-permissions", version: "1.5.13" },
-      runtime: { node: "22.0.0", platform: "test", arch: "test", cwd: "/test", transport: "stdio" },
-      env: {},
+      auth: { status: "unknown" },
+      warnings: [],
     };
   };
   const server = buildServer({ runDoctor });
@@ -938,13 +934,14 @@ test("doctor tool passes deep and client info through to runDoctor", async () =>
 
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
-    const res = await client.callTool({ name: "doctor", arguments: { deep: true } });
+    const res = await client.callTool({ name: "doctor", arguments: { deep: true, workspace: "/some/workspace" } });
     assert.equal(captured.deep, true);
+    assert.equal(captured.workspace, "/some/workspace");
     const info = captured.getClientInfo();
     assert.equal(info.version.name, "doctor-test-client");
     assert.equal(info.version.version, "9.9");
     assert.ok(info.capabilities, "expected client capabilities to be exposed");
-    assert.equal(payload(res).runtime.transport, "stdio");
+    assert.deepEqual(payload(res).auth, { status: "unknown" });
   } finally {
     await client.close();
   }
@@ -1107,7 +1104,7 @@ test("the doctor tool passes the host's abort signal", async () => {
   let seen;
   const runDoctor = async ({ signal }) => {
     seen = { signal };
-    return { plugin: { version: "x" }, client: { name: null, version: null, capabilities: {} }, agent: { found: true, command: "agy", version: null }, runtime: { node: "", platform: "", arch: "", cwd: "", transport: "stdio" }, env: {} };
+    return { plugin: { name: "agy-delegate-mcp", version: "x" }, client: { name: null, version: null }, agent: { found: true, command: "agy", version: null }, auth: { status: "unknown" }, warnings: [] };
   };
   const server = buildServer({ runDoctor });
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
