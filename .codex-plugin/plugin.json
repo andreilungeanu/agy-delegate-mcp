@@ -1,6 +1,6 @@
 {
   "name": "agy-delegate",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Ask Gemini what it thinks, or hand it the work: second opinions, plans and edits by Google Antigravity (agy).",
   "author": {
     "name": "Andrei Lungeanu",
@@ -24,7 +24,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "npm:agy-delegate-mcp@2.1.0"
+        "npm:agy-delegate-mcp@2.2.0"
       ],
       "tool_timeout_sec": 21660
     }

@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-25
+
+### Added
+
+- Server info carries a title, a description and the repository URL, and each tool has a title.
+  The server advertises `tools.listChanged: false`.
+
+### Changed
+
+- With no `model`, a new session runs `gemini-4-hydrogen`, where it ran agy's default. A resume
+  keeps the model last set on the session; after a server restart it runs `gemini-4-hydrogen`.
+  An account that does not offer `gemini-4-hydrogen` runs agy's default, with a
+  `protocolWarnings` entry.
+- `delegate`, `cancel`, `steer` and `doctor` reject an unknown input field instead of dropping it.
+  A misspelled `resumeSessionId` started a new session.
+- The delegate skill covers second opinions and model comparisons as well as handoff, at about a
+  third of its former length. It no longer scales delegation by task size or carries a Security
+  section. `reference.md` keeps result fields, failure reasons and resume rules; the progress
+  format moved to TECHNICAL.md, and the `contextFiles` trust note to SECURITY.md.
+- The `delegate` description and the server instructions open with asking agy as well as
+  delegating to it: `mode: "ask"` gives a second opinion, and parallel calls with the same brief
+  compare views.
+- The plugin, marketplace, npm and MCP Registry descriptions name both uses.
+- The MCP SDK is pinned to 2.4.0.
+
 ## [2.1.0] - 2026-11-24
 
 ### Changed
