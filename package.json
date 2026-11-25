@@ -3,7 +3,7 @@
   "version": "2.2.0",
   "mcpName": "io.github.andreilungeanu/agy-delegate-mcp",
   "type": "module",
-  "description": "Ask Gemini what it thinks, or hand it the work. Second opinions, plans and edits by Google Antigravity's CLI (agy), inside Claude Code, Codex, Cursor or any MCP client.",
+  "description": "Turn your coding agent into a council: bring Gemini Neon and Hydrogen into the conversation for second opinions, then hand them plans and edits. MCP server and plugin for Google Antigravity's CLI.",
   "license": "MIT",
   "author": "Andrei Lungeanu <andrei@lungeanu.ro>",
   "repository": {

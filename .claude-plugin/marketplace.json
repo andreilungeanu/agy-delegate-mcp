@@ -10,7 +10,7 @@
     {
       "name": "agy-delegate",
       "source": "./",
-      "description": "Ask Gemini what it thinks, or hand it the work: second opinions, plans and edits by Google Antigravity (agy).",
+      "description": "Turn your agent into a council: ask Gemini through Google Antigravity (agy) for second opinions, then hand it plans and edits.",
       "license": "MIT",
       "keywords": [
         "mcp",

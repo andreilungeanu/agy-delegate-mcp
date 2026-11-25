@@ -21,7 +21,7 @@ const SERVER_ICONS = [
 const SERVER_INFO = {
   name: "agy-delegate-mcp",
   title: "Antigravity Delegate",
-  description: "Ask Google Antigravity (agy) for a second opinion, or hand it plans and edits.",
+  description: "Bring Google Antigravity (agy) into your agent's council for second opinions, plans and edits.",
   version: VERSION,
   websiteUrl: "https://github.com/andreilungeanu/agy-delegate-mcp",
   icons: SERVER_ICONS,
