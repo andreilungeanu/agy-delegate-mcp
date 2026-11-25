@@ -61,7 +61,7 @@ Each plugin works on its own, and they are built to work together. Install the o
 
 - [Codex Delegate](https://github.com/andreilungeanu/codex-delegate-mcp) — the OpenAI Codex CLI: GPT-6.2 Sol, GPT-6.2 Astra and the other Codex models
 - [Cursor Delegate](https://github.com/andreilungeanu/cursor-delegate-mcp) — Cursor's CLI agent: Grok 4.7, Composer 2.5
-- **Antigravity Delegate** (this one) — Google Antigravity's CLI: Gemini 4 Neon, Carbon, Argon and Hydrogen
+- **Antigravity Delegate** (this one) — Google Antigravity's CLI: Gemini 4 Neon, Carbon and Hydrogen
 
 Model names are examples; each CLI offers what your account includes.
 
