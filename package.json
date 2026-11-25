@@ -50,15 +50,18 @@
     "test": "node scripts/run-tests.mjs",
     "test:pack": "node test/npm-package-smoke.mjs",
     "start": "node src/server.js",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "bench": "vitest bench --run"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@codspeed/vitest-plugin": "^6.1.1",
     "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "^26.1.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
   }
 }

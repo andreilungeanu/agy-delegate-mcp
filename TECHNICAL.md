@@ -161,6 +161,20 @@ claude --plugin-dir .
 claude plugin validate .
 ```
 
+### Benchmarks
+
+`benchmarks/` holds Vitest benchmarks of the bridge's own CPU work, with agy replaced by recorded
+turns: JSON-RPC frame parsing, turn-state tracking, result shaping, and whole `runDelegate` calls.
+Vitest needs Node 22.12 or later; the server itself still supports Node 20.
+
+```shell
+npm run bench
+```
+
+The `codspeed` workflow runs them on every pull request and push to `main`, and
+[CodSpeed](https://app.codspeed.io/andreilungeanu/agy-delegate-mcp) reports regressions on the
+pull request.
+
 ## Publishing (maintainers)
 
 1. Public repo: [andreilungeanu/agy-delegate-mcp](https://github.com/andreilungeanu/agy-delegate-mcp)

@@ -9,6 +9,7 @@
 [![node](https://img.shields.io/node/v/agy-delegate-mcp)](https://nodejs.org)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![tests](https://github.com/andreilungeanu/agy-delegate-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/andreilungeanu/agy-delegate-mcp/actions/workflows/test.yml)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/andreilungeanu/agy-delegate-mcp?utm_source=badge)
 
 <img src="assets/logo-light.png" alt="Antigravity Delegate logo" width="150" align="left" hspace="15">
 
