@@ -10,7 +10,7 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![tests](https://github.com/andreilungeanu/agy-delegate-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/andreilungeanu/agy-delegate-mcp/actions/workflows/test.yml)
 
-<img src="assets/logo-light.png" alt="Antigravity Delegate logo" width="150" align="left" hspace="15">
+<img src="assets/logo-light.png" alt="Antigravity Delegate logo" width="105" align="left" hspace="15">
 
 Antigravity Delegate is the MCP bridge to **Google Antigravity's CLI agent (`agy`)**. From Claude Code, ChatGPT/Codex, Cursor, Copilot or any MCP client, your agent can ask Gemini for a second opinion, put one question to several models at once, or hand agy a task to plan or build, and get a structured result back from each call.
 
