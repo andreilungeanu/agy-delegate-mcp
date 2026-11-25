@@ -1,6 +1,6 @@
 {
   "name": "agy-delegate",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Turn your agent into a council: ask Gemini through Google Antigravity (agy) for second opinions, then hand it plans and edits.",
   "author": {
     "name": "Andrei Lungeanu",
@@ -24,7 +24,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "npm:agy-delegate-mcp@2.2.0"
+        "npm:agy-delegate-mcp@2.3.0"
       ],
       "tool_timeout_sec": 21660
     }

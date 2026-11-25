@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Plugins that bring Google Antigravity's CLI into your coding agent's council through MCP.",
-    "version": "2.2.0"
+    "version": "2.3.0"
   },
   "plugins": [
     {
       "name": "agy-delegate",
       "description": "Turn your agent into a council: ask Gemini through Google Antigravity (agy) for second opinions, then hand it plans and edits.",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "source": "./"
     }
   ]

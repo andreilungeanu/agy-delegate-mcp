@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-25
+
 ### Added
 
 - `doctor deep` reports whether agy is signed in (`auth.status`: `ok`, or `logged-out` on ACP's
@@ -23,6 +25,8 @@ All notable changes to this project are documented here. The format follows
   `auth.plan`.
 - `doctor` leaves out what rarely changes a diagnosis: the client's capabilities, the runtime
   section, the agent's ACP protocol version and capabilities, and unset environment variables.
+- The package, plugin and server descriptions present the plugin as bringing Gemini into a
+  council: second opinions first, then handoff.
 
 ## [2.2.0] - 2026-11-25
 
