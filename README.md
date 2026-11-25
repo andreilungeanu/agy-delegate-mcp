@@ -43,7 +43,7 @@ Your agent writes the brief, agy edits the files, and your agent reads the diff 
 ## Features
 
 - 📦 **Named results** — final answer, the files agy's edit tools reported changing, session id, model and thinking level, the commands agy ran with their exit codes, and token usage, returned as one compact JSON payload.
-- ⏳ **Runs in the background in Claude Code** — in the main session of the interactive Claude Code CLI, `delegate` runs as an MCP task: the call returns once agy has the prompt, and the result arrives as a task notification when agy finishes. Calls from subagents wait for the result.
+- ⏳ **Runs in the background, with MCP Tasks** — `delegate` serves the MCP Tasks extension (`io.modelcontextprotocol/tasks`), so a host that speaks it gets a task back once agy has the prompt and the result when agy finishes. In the main session of the interactive Claude Code CLI, you keep working and the result arrives as a task notification; calls from subagents wait for the result.
 - 🖼️ **Attach what prose can't point at** — `contextFiles` sends screenshots, mockups and other files along with the brief.
 - 🔋 **Runs on your Antigravity plan** — delegated work uses the Google account agy is signed into, separate from your host's chat quota.
 - 🤝 **Native plugins** — install into Claude Code, ChatGPT/Codex, or GitHub Copilot CLI and say *"ask Gemini"* or *"delegate this to Antigravity"*. The shared skill teaches your agent to write the brief and review the result.
