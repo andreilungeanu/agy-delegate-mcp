@@ -11,9 +11,8 @@ The bridge auto-approves every permission request and returns named fields (`ses
 
 ## `delegate` tool
 
-Parameters, return fields, failure reasons and timeouts:
-[skills/delegate/reference.md](skills/delegate/reference.md) — the single source of truth
-for the tool contract. Orchestration guidance is in
+Input fields are described in the tool schema. Result fields and failure reasons:
+[skills/delegate/reference.md](skills/delegate/reference.md). Orchestration guidance is in
 [skills/delegate/SKILL.md](skills/delegate/SKILL.md).
 
 ### Result envelope
@@ -92,7 +91,15 @@ diagnostic, not fail the call.
   before the turn it targets settles is a refusal (a warning); one that fails after is the turn
   failing.
 - **Usage**: the `session/prompt` reply carries the turn's token counts (`usage`); `usage_update`
-  frames carry the session's context fill (`used`, `size`).
+  frames carry the session's context fill (`used`, `size`). A steered turn sums its replies:
+  `inputTokens`, `outputTokens` and `totalTokens` appear only when every reply that reported usage
+  carried them; a cached or thought count a reply left out counts as 0.
+- **Progress**: thinking, streamed response sentences, tool starts, edited files and the turn
+  title (`turn titled: …`) arrive as MCP progress notifications, or as the task's status message
+  for an MCP task. The title labels concurrent delegations and is named in timeout errors; it is
+  not returned in the result. While a turn runs, a `still working — <elapsed>, last agent frame
+  <age> ago, running: <tool>` heartbeat is emitted. After the hard cap, stopping the agent takes
+  up to 10 s more.
 - **Teardown**: `session/close` for each session when `sessionCapabilities.close` is advertised,
   then stdin EOF; agy exits by itself within the 2 s grace, then the tree is killed. A stall,
   abort, agent exit, force cancel or shutdown skips the grace.
@@ -112,6 +119,8 @@ diagnostic, not fail the call.
 | `AGY_DELEGATE_HARD_CAP_MS` | Absolute delegation cap (default 6 h). |
 | `AGY_DELEGATE_BACKGROUND_WAIT_MS` | How long to wait for a command agy moved to the background (default 10 min). |
 | `ACP_E2E` | Set to `1` to run the live e2e tests locally; they spend agy quota. |
+
+A non-positive or malformed timeout value falls back to its default.
 
 ## Source layout
 
