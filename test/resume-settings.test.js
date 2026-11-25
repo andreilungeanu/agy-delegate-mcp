@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { EventEmitter } from "node:events";
-import { runDelegate } from "../src/delegate.js";
+import { DEFAULT_MODEL as BRIDGE_DEFAULT, runDelegate } from "../src/delegate.js";
 import { stampSettlement } from "../src/acp-client.js";
 
 const DEFAULT_MODEL = "gemini-4-neon";
 const DEFAULT_LEVEL = "high";
-const LEVELS = { "gemini-4-neon": ["low", "medium", "high", "xhigh"], "gemini-3.8-flash": ["low", "medium", "high"] };
+// agy's own default; the bridge sends its default (BRIDGE_DEFAULT) whenever model is unset.
+const LEVELS = { "gemini-4-neon": ["low", "medium", "high", "xhigh"], "gemini-3.8-flash": ["low", "medium", "high"], "gemini-4-hydrogen": ["low", "medium", "high"] };
 
 function agyOptions(model, level) {
   return [
@@ -58,19 +59,17 @@ function fakeAgy({ freshId, agySessions, effortReplyOmitsModel, sent }) {
 }
 
 function expected({ first, kind, second }) {
-  const record = kind !== "takes" ? undefined
-    : first.model === undefined && first.effort === undefined ? {}
-    : { model: first.model ?? DEFAULT_MODEL, effort: first.effort };
-  const model = second.model ?? record?.model;
+  const record = kind !== "takes" ? undefined : { model: first.model ?? BRIDGE_DEFAULT, effort: first.effort };
+  const model = second.model ?? record?.model ?? BRIDGE_DEFAULT;
   const effort = second.effort ?? (model === record?.model ? record?.effort : undefined);
   const sent = [];
-  if (model !== undefined && model !== DEFAULT_MODEL) sent.push(["model", model]);
+  if (model !== DEFAULT_MODEL) sent.push(["model", model]);
   if (effort !== undefined) sent.push(["thought_level", effort]);
-  const served = model ?? DEFAULT_MODEL;
+  const served = model;
   // What the second call leaves on record for the session it ran on, which a bare resume applies.
-  const kept = model !== undefined || effort !== undefined ? { model: served, effort } : {};
+  const kept = { model: served, effort };
   const thirdSent = [];
-  if (kept.model !== undefined && kept.model !== DEFAULT_MODEL) thirdSent.push(["model", kept.model]);
+  if (kept.model !== DEFAULT_MODEL) thirdSent.push(["model", kept.model]);
   if (kept.effort !== undefined) thirdSent.push(["thought_level", kept.effort]);
   return {
     sent,
@@ -80,11 +79,11 @@ function expected({ first, kind, second }) {
     warnsNoRecord: kind === "no-record" && second.model === undefined,
     noRecordNamesModel: true,
     warnsFellBack: kind === "falls-back",
-    third: { sent: thirdSent, resumed: true, effectiveModel: kept.model ?? DEFAULT_MODEL, effectiveEffort: { thought_level: kept.effort ?? DEFAULT_LEVEL } },
+    third: { sent: thirdSent, resumed: true, effectiveModel: kept.model, effectiveEffort: { thought_level: kept.effort ?? DEFAULT_LEVEL } },
   };
 }
 
-const MODELS = [undefined, "gemini-4-neon", "gemini-3.8-flash"];
+const MODELS = [undefined, "gemini-4-neon", "gemini-3.8-flash", "gemini-4-hydrogen"];
 const cases = [];
 for (const effortReplyOmitsModel of [false, true]) {
   for (const kind of ["takes", "falls-back", "no-record"]) {

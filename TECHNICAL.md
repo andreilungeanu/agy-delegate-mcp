@@ -69,7 +69,9 @@ diagnostic, not fail the call.
   request is answered `cancelled` rather than selecting a reject.
 - **Model and effort**: `session/set_config_option` with `configId: "model"` and a base id, sent
   only when the session reports a different current model; its reply carries the new model's
-  `configOptions`, which are what `effort` is validated against. `effort` goes out as
+  `configOptions`, which are what `effort` is validated against. With no `model` and nothing on
+  record for the session, the bridge sends `gemini-4-hydrogen` (`DEFAULT_MODEL` in
+  `src/delegate.js`), or leaves agy's current model, with a warning, when agy does not list it. `effort` goes out as
   `configId: "thought_level"`. The levels on offer differ per model.
 - **Mode**: `session/set_mode` before every prompt — `agent` and `ask` map to `default`, `plan`
   to `plan`. `ask` also prefixes the prompt with an answer-only instruction; agy has no ask mode.

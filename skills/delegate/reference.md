@@ -4,7 +4,9 @@ What a result field or failure `reason` means and what to do next.
 
 ## Inputs
 
-`model` takes the base id (`gemini-4-neon`) and `effort` the level. `agy models` and ACP's model
+`model` takes the base id (`gemini-4-neon`) and `effort` the level. Omitted on a new session,
+`model` is `gemini-4-hydrogen`; an account that does not offer it runs agy's default, with a
+`protocolWarnings` entry. `agy models` and ACP's model
 list spell each model with the level as a suffix (`gemini-4-neon-high`); a suffixed id fails as
 `unknown-model`. `doctor` with `deep: true` lists the base ids.
 
@@ -59,8 +61,8 @@ failed, meaning none of that work was in context.
 agy reopens a resumed session at its defaults, so the bridge re-sends `mode` every time, and
 `model` and `effort` when it has them. A resume that omits `model` uses the model this server
 process last set on the session; an omitted `effort` uses the last one set, unless `model`
-changes. A server with no record of the session (restarted, or not the one that ran it) leaves
-agy's defaults; a resume that then omits `model` says so in `protocolWarnings`. For a `delegate`
+changes. A server with no record of the session (restarted, or not the one that ran it) runs
+`gemini-4-hydrogen` when `model` is omitted, and says so in `protocolWarnings`. For a `delegate`
 run as an MCP task, the task id works as `resumeSessionId` while this server process runs.
 
 ## Running turns

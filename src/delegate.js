@@ -13,6 +13,8 @@ import { makeError } from "./errors.js";
 import { effortSettings, optionsFrom, resolveEffort, allowedValues } from "./model-options.js";
 import { transcriptFrames } from "./jsonrpc.js";
 
+// The model a session runs when the caller sets none and the session has no model on record.
+export const DEFAULT_MODEL = "gemini-4-hydrogen";
 export const DEFAULT_HANDSHAKE_MS = 60000;
 
 // Model and effort last set on each session by this process. agy reopens a resumed session at its
@@ -504,6 +506,7 @@ export async function runDelegate({
   let servedModel;
   let effectiveEffort;
   let noSettingsRecord = false;
+  let defaultUnavailable = false;
   const contextWarnings = [];
   try {
     const res = await supervisor.supervise(async () => {
@@ -521,7 +524,11 @@ export async function runDelegate({
       const earlier = resumeSessionId && sessionId === resumeSessionId ? sessionSettings.get(sessionId) : undefined;
       // The record lives in memory: a server restarted since the session ran has none to apply.
       noSettingsRecord = !!resumeSessionId && sessionId === resumeSessionId && !earlier && model === undefined;
-      const targetModel = model ?? earlier?.model;
+      // The default applies only where agy offers it: an account without it runs agy's own default.
+      const offered = allowedValues(modelOption(options));
+      defaultUnavailable = model === undefined && earlier?.model === undefined
+        && offered.length > 0 && !offered.includes(DEFAULT_MODEL);
+      const targetModel = model ?? earlier?.model ?? (defaultUnavailable ? configOptionValue(options, "model") : DEFAULT_MODEL);
       // A remembered effort holds only on the model it was set for: another model may not offer it.
       const targetEffort = effort ?? (targetModel === earlier?.model ? earlier?.effort : undefined);
       if (targetModel !== undefined) {
@@ -537,12 +544,8 @@ export async function runDelegate({
         options = optionsFrom(await applyEffort(client, sessionId, target, targetEffort, options));
       }
       servedModel = configOptionValue(options, "model") ?? modelBeforeEffort;
-      // Saved once agy accepted them, with the model agy reports, so an effort set on agy's default
-      // is tied to that model. A session run on agy's defaults is recorded too, as having none, so
-      // its resume here does not read as a restart.
-      sessionSettings.set(sessionId, targetModel !== undefined || targetEffort !== undefined
-        ? { model: targetModel ?? servedModel, effort: targetEffort }
-        : {});
+      // Saved once agy accepted them, so a resume here reapplies them.
+      sessionSettings.set(sessionId, { model: targetModel ?? servedModel, effort: targetEffort });
       // What agy reported in force, never the requested value.
       effectiveEffort = effortSettings(options);
       await client.setMode(sessionId, agyMode);
@@ -695,8 +698,11 @@ export async function runDelegate({
       .map((a) => ({ path: a.path, ...(a.summary !== undefined ? { summary: a.summary } : {}) }));
     if (others.length) out.artifacts = others;
     if (resumeError) protocolWarnings.push(`resuming ${resumeSessionId} failed, started a fresh session: ${resumeError}`);
+    if (defaultUnavailable) {
+      protocolWarnings.push(`${DEFAULT_MODEL}, the default model, is not offered on this account, so agy's default${servedModel ? ` (${servedModel})` : ""} ran. Pass model to choose one.`);
+    }
     if (noSettingsRecord) {
-      protocolWarnings.push(`agy reopened the session at its default model${servedModel ? ` (${servedModel})` : ""}: this server has no record of the model set earlier, as it keeps none across restarts. Pass model to choose one.`);
+      protocolWarnings.push(`This server has no record of the model set earlier on this session, as it keeps none across restarts, so it ran the default model${servedModel ? ` (${servedModel})` : ""}. Pass model to choose one.`);
     }
     protocolWarnings.push(...contextWarnings);
     protocolWarnings.push(...frameWarnings);

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { McpServer, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY } from "@modelcontextprotocol/server";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
-import { runDelegate as runDelegateDefault } from "./delegate.js";
+import { DEFAULT_MODEL, runDelegate as runDelegateDefault } from "./delegate.js";
 import { runDoctor as runDoctorDefault } from "./doctor.js";
 import { VERSION, readPackageVersion } from "./version.js";
 import { children } from "./proc.js";
@@ -69,7 +69,7 @@ export const delegateInputSchema = z.object({
   mode: z.enum(["agent", "plan", "ask"]).default("agent").describe("agent implements; plan writes a plan, returned as plan; ask answers. plan and ask are instructions to the agent, not limits."),
   resumeSessionId: z.string().trim().optional().describe("Continue an existing agy session. When delegate ran as an MCP task, its server-side task id works too."),
   workspace: z.string().trim().min(1, "workspace must not be blank").describe("The agent's working directory, not a limit. Smallest directory holding the task's files; with no such directory the project root is the floor. Must already exist; never create one for the call."),
-  model: z.string().trim().min(1, "model must be a non-empty string").optional().describe("agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, agy's default runs (a resume keeps the model last set on the session) and effectiveModel names it. doctor deep:true lists every id."),
+  model: z.string().trim().min(1, "model must be a non-empty string").optional().describe(`agy base model id, no level suffix: gemini-4-neon, gemini-3.8-flash. Omitted, a new session runs ${DEFAULT_MODEL} (agy's default where the account lacks it), a resume keeps the model last set on the session, and effectiveModel names it. doctor deep:true lists every id.`),
   // Open string: a model's levels are known only once it is selected, and are validated then.
   effort: z.string().trim().min(1).optional().describe("agy thinking level for the selected model (low, medium, high, xhigh). Levels differ per model; invalid values fail before the prompt and name the accepted set. Pass only when the user asks for agy effort — the host's own reasoning setting is unrelated."),
   contextFiles: z.array(z.string()).optional().describe("Paths to attach instead of pasting contents into spec. Text becomes references the agent may open; images (png/jpg/gif/webp, <5MB) are sent inline. Relative paths resolve against workspace but are not limited to it. Skips are reported in protocolWarnings, never fatal."),

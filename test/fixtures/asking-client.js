@@ -20,6 +20,7 @@ export function askingClientFactory({ questions = ASKED, rejects = 0 } = {}) {
       start: async () => {},
       initialize: async () => {},
       newSession: async () => ({ sessionId: "sess-ask" }),
+      setConfigOption: async () => ({}),
       setMode: async () => {},
       stop: async () => true,
       prompt: async () => {

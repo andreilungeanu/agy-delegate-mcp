@@ -1648,7 +1648,7 @@ test("a delegation without a workspace is refused before anything is spawned", a
 
 // agy's session options, shaped like session/new on 1.5.13: base model ids under "model", the
 // thinking level under "thought_level" (category thought_level), each model with its own levels.
-const AGY_LEVELS = { "gemini-4-neon": ["low", "medium", "high", "xhigh"], "gemini-3.8-flash": ["low", "medium", "high"], "claude-sonnet-5-5": ["low", "medium", "high"] };
+const AGY_LEVELS = { "gemini-4-neon": ["low", "medium", "high", "xhigh"], "gemini-3.8-flash": ["low", "medium", "high"], "claude-sonnet-5-5": ["low", "medium", "high"], "gemini-4-hydrogen": ["low", "medium", "high"] };
 function agyOptions(model, thought, mode = "default", models = Object.keys(AGY_LEVELS)) {
   return [
     { id: "model", name: "Model", category: "model", currentValue: model, options: models.map((value) => ({ value })) },
@@ -1692,7 +1692,7 @@ test("runDelegate rejects an unknown model before prompting and names agy's base
     runDelegate({ spec: "task", model: "gemini-4-neon-high", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) }),
     (err) => {
       assert.equal(err.reason, "unknown-model");
-      assert.match(err.message, /agy offers: gemini-4-neon, gemini-3\.8-flash, claude-sonnet-5-5/);
+      assert.match(err.message, /agy offers: gemini-4-neon, gemini-3\.8-flash, claude-sonnet-5-5, gemini-4-hydrogen/);
       assert.match(err.message, /thinking level with effort/);
       // The id is assigned at session/new, before the config calls that raise this.
       assert.match(err.message, /Resume with resumeSessionId sess-models/);
@@ -1761,11 +1761,21 @@ test("runDelegate switches model through the model config option", async () => {
   assert.equal(out.effectiveModel, undefined, "silence means the request was honored");
 });
 
-test("runDelegate reports the session's model as effectiveModel when model is omitted", async () => {
+test("runDelegate runs the default model when model is omitted, and names it as effectiveModel", async () => {
   const calls = [];
   const out = await runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: modelOptionsFactory(undefined, { calls }) });
+  assert.deepEqual(calls.filter((c) => c[0] === "config"), [["config", "model", "gemini-4-hydrogen"]]);
+  assert.equal(out.effectiveModel, "gemini-4-hydrogen");
+  assert.equal(out.protocolWarnings, undefined);
+});
+
+test("runDelegate runs agy's default model, with a warning, when the account does not offer the default", async () => {
+  const calls = [];
+  const models = Object.keys(AGY_LEVELS).filter((m) => m !== "gemini-4-hydrogen");
+  const out = await runDelegate({ spec: "task", workspace: process.cwd(), clientFactory: modelOptionsFactory(models, { calls }) });
   assert.deepEqual(calls.filter((c) => c[0] === "config"), []);
   assert.equal(out.effectiveModel, "gemini-4-neon");
+  assert.ok(out.protocolWarnings?.some((w) => /gemini-4-hydrogen, the default model, is not offered on this account, so agy's default \(gemini-4-neon\) ran/.test(w)), JSON.stringify(out.protocolWarnings));
 });
 
 test("runDelegate sends effort as thought_level and reports what agy echoes", async () => {

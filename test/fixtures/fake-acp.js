@@ -9,6 +9,7 @@ const MODELS = {
   "gemini-4-neon": ["low", "medium", "high", "xhigh"],
   "gemini-3.8-flash": ["low", "medium", "high"],
   "claude-sonnet-5-5": ["low", "medium", "high"],
+  "gemini-4-hydrogen": ["low", "medium", "high"],
 };
 const MODES = ["default", "accept-edits", "auto", "plan"];
 const DEFAULTS = { model: "gemini-4-neon", thought: "high", mode: "default" };
