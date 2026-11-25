@@ -61,7 +61,7 @@ const taskStore = createTaskStore();
 
 // Loaded at connect: only what a caller needs to decide whether to delegate. Call-time facts go on
 // the parameter descriptions.
-export const SERVER_INSTRUCTIONS = `Delegate coding work to Antigravity (agy) through the delegate tool. Every permission the agent requests is auto-approved, in every mode: agent/plan/ask reach any file the user account can, and mode instructs the agent rather than limiting it. Scope workspace tightly and review the git diff after every run — filesReportedByEditTools carries only what the agent's edit tools reported; the diff is authoritative.`;
+export const SERVER_INSTRUCTIONS = `Ask Antigravity (agy) or hand it coding work through the delegate tool. Every permission the agent requests is auto-approved, in every mode: agent/plan/ask reach any file the user account can, and mode instructs the agent rather than limiting it. Scope workspace tightly and review the git diff after every run — filesReportedByEditTools carries only what the agent's edit tools reported; the diff is authoritative.`;
 
 // Strict: an unknown key is almost always a typo, and a dropped resumeSessionId starts a new session.
 export const delegateInputSchema = z.object({
@@ -211,7 +211,7 @@ export function buildServer({
     "delegate",
     {
       description:
-        "Delegate a coding task to Antigravity's agy over ACP. Never shell out to agy — use this tool only. Auto-approves every permission the agent requests, in any mode and anywhere on disk. agy's clarifying questions arrive in questions — resume with resumeSessionId and the answers in spec. Leave model and effort unset unless the user explicitly asks. See the delegate skill.",
+        "Ask Antigravity's agy a question or delegate coding work to it over ACP. Never shell out to agy — use this tool only. mode ask gives a second opinion; parallel calls with the same brief compare views. Auto-approves every permission the agent requests, in any mode and anywhere on disk. agy's clarifying questions arrive in questions — resume with resumeSessionId and the answers in spec. Leave model and effort unset unless the user explicitly asks. If the delegate skill is installed, load it before handing off implementation.",
       inputSchema: delegateInputSchema,
       title: "Delegate coding task to Antigravity",
       annotations: {
