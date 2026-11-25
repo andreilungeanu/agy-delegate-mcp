@@ -16,6 +16,8 @@ Antigravity Delegate is the MCP bridge to **Google Antigravity's CLI agent (`agy
 
 <br clear="left">
 
+![A terminal recording of Claude Code asking Gemini Neon through Antigravity why a repo prints "today 0": in ask mode Gemini finds that commits are bucketed by UTC while the grid uses local dates; Gemini then builds the fix in the same session with a test that fails on the old code, and Claude reruns the tests and the CLI before reporting today 4](assets/demo.gif)
+
 ## 🧠 Get a second opinion
 
 > Ask Gemini Neon high what it thinks about moving the session store to SQLite.
@@ -58,6 +60,8 @@ Your agent writes the brief, agy edits the files, and your agent reads the diff 
 Each plugin works on its own, and they are built to work together. Install the ones your subscriptions cover, and the agent you already use can bring Gemini 4 Neon, Carbon or Hydrogen, GPT-6.2 Sol or Astra, and Grok 4.7 or Composer 2.5 into the same conversation as peers. One question goes to all of them in parallel, and your agent sets their answers beside its own.
 
 > Ask Gemini Neon, Codex Sol and Grok 4.7 how they would restructure the auth module, then tell me where they agree.
+
+![A terminal recording of Claude Code asking Gemini Neon, Codex Sol and Grok 4.7 why a repo prints "today 0": three delegate calls run as background tasks, the answers come back, and Claude lists where the models agree and where they differ; Codex then builds the chosen fix on the same thread, and Claude confirms the new test fails on the old code and all four tests pass](assets/council.gif)
 
 - [Codex Delegate](https://github.com/andreilungeanu/codex-delegate-mcp) — the OpenAI Codex CLI: GPT-6.2 Sol, GPT-6.2 Astra and the other Codex models
 - [Cursor Delegate](https://github.com/andreilungeanu/cursor-delegate-mcp) — Cursor's CLI agent: Grok 4.7, Composer 2.5
